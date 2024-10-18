@@ -54,9 +54,7 @@ Adafruit_H3LIS331 lis = Adafruit_H3LIS331();
 // Define the ESC servo rate (typically 50Hz for most ESCs)
 const int ESC_SERVO_RATE = 400;  
 
-// Threshold for considering "near zero"
-const float ZERO_THRESHOLD = 0.05;
-const float SIGNIFICANT_CHANGE = 0.05;  // Threshold for detecting significant change
+const float ZERO_THRESHOLD = 0.05;  // Threshold for detecting significant change
 
 // Pin definitions for motor outputs
 const int motorPin1 = 2;  // Example pin for motor 1
@@ -171,12 +169,12 @@ void handleTankDrive() {
   float m2 = x - y;  // Motor 2 throttle
 
   // Only update if there is a significant change
-  if (abs(m1 - lastMotor1Throttle) > SIGNIFICANT_CHANGE) {
+  if (abs(m1 - lastMotor1Throttle) > ZERO_THRESHOLD) {
     setThrottle(m1, motorPin1);  // Set new desired throttle for motor 1
     lastMotor1Throttle = m1;     // Store the last value for comparison
   }
 
-  if (abs(m2 - lastMotor2Throttle) > SIGNIFICANT_CHANGE) {
+  if (abs(m2 - lastMotor2Throttle) > ZERO_THRESHOLD) {
     setThrottle(m2, motorPin2);  // Set new desired throttle for motor 2
     lastMotor2Throttle = m2;     // Store the last value for comparison
   }
@@ -548,7 +546,12 @@ void handleMeltybrainDrive() {
 void loop() {
   // Update the IBus object for Teensy
   ibus.loop();
-  
+
+  while(!rc_signal_is_healthy())
+  {
+    setRGB(0xdede,0x0000,0x8282);
+    ibus.loop();
+  }
   updateInputs();
   
   if(isInTankDriveMode())
