@@ -155,13 +155,10 @@ int throttleToPWM(float throttle) {
   return map(throttle * 1000, -1000, 1000, PWM_1000us, PWM_2000us);
 }
 
-// Modified setThrottle to only store the desired throttle, no analogWrite() here
-void setThrottle(float throttle, int motorPin) {
-  if (motorPin == motorPin1) {
-    motor1Throttle = throttleToPWM(throttle);
-  } else if (motorPin == motorPin2) {
-    motor2Throttle = throttleToPWM(throttle);
-  }
+// Modified setThrottle to only store the desired throttle, no analogWrite() here <
+void setThrottle(float throttle1, float throttle2) {
+  motor1Throttle = throttleToPWM(throttle1);          // <= FIRST patch.
+  motor2Throttle = throttleToPWM(throttle2);
 }
 
 // Function to handle tank drive logic
