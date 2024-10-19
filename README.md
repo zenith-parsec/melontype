@@ -6,7 +6,22 @@ melontype is an open source meltybrain library, collaboratively written with Cha
 * it hasn't even been tested with ESCs plugged in.
 * use at your own risk.
 
+This is the transcript of me interacting with ChatGPT that resulted in this code.
 
+  https://chatgpt.com/share/67132632-9b8c-8000-8483-046ebea0f9ee
+
+It wasn't just me saying "write me the code for a meltybrain combat robot." 
+
+This transcript might help you understanding the code. You could just search for the 
+function name, for example. Some code has been modified from what the bot wrote, and
+I've done some clean up. 
+
+It took on the order of 10 hours to write, which is much faster than it would've taken
+me to get to this point. I got frustrated several times with the AI for not being able
+to do anything right. 
+
+This is also the 2nd attempt at doing it, and it's only as good (ha!) as it
+is because I learned so much from how badly it did with the first attempt.
 
 From the top of the source file when I initially committed it:
 ```
