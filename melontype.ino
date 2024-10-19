@@ -54,7 +54,7 @@ Adafruit_H3LIS331 lis = Adafruit_H3LIS331();
 // Define the ESC servo rate (typically 50Hz for most ESCs)
 const int ESC_SERVO_RATE = 400;  
 
-const float ZERO_THRESHOLD = 0.05;  // Threshold for detecting significant change
+const float ZERO_THRESHOLD = 0.1;  // Threshold for detecting significant change. This is usually between -1 and 1 so 1/20th each step
 
 // Pin definitions for motor outputs
 const int motorPin1 = 2;  // Example pin for motor 1
@@ -73,6 +73,7 @@ volatile uint16_t blueState = 0xFFFF;   // Example pattern for blue (always on)
 // IntervalTimer objects
 IntervalTimer ledTimer;
 IntervalTimer pwmTimer;
+bool pwmIntCalled;
 
 // acceleration offsets due to gravity
 float accelOffsetX;
@@ -85,13 +86,13 @@ volatile uint8_t last_cnt_poll;
 
 // PWM frequency is 400Hz, so 1 cycle is 2500us.
 const int PWM_1000us = 65536 * 40 / 100; // 40% of a 2500us cycle = 1000us 
-const int PWM_2000us = 65536 * 80 / 100; // 80% of a 2500us cycle = 1000us
+const int PWM_2000us = 65536 * 80 / 100; // 80% of a 2500us cycle = 2000us
 
 // Global variables for motor throttles
 float motor1Throttle = 0.0;
 float motor2Throttle = 0.0;
-float lastMotor1Throttle = 0.0;
-float lastMotor2Throttle = 0.0;
+float lastMotor1Throttle = -1.0; // make them different to get the update.
+float lastMotor2Throttle = -1.0; // ditto
 
 
 // Variables to store inputs
@@ -102,7 +103,7 @@ volatile float stickLength   = 0.0; // Length of the stick vector
 volatile float throttle      = 0.0; // Throttle input = ch2
 volatile float sidewaysInput = 0.0; // Sideways input = ch3
 volatile float radiusInput   = 0.0; // Radius input = ch4
-volatile float radiusSize    = 0.0; // Mapped radius size (0.1 cm to 10 cm)
+volatile float radiusSize    = 0.01; // Mapped radius size (0.1 cm to 10 cm) in meters
 volatile float headingOffset = 0.0; // offset around circle heading light should be = ch5
 
 
@@ -153,10 +154,11 @@ int throttleToPWM(float throttle) {
   return map(throttle * 1000, -1000, 1000, PWM_1000us, PWM_2000us);
 }
 
-// Modified setThrottle to only store the desired throttle, no analogWrite() here <
+// Modified setThrottle to only store the desired throttle, no analogWrite() here
 void setThrottle(float throttle1, float throttle2) {
-  motor1Throttle = throttleToPWM(throttle1);          // <= FIRST patch.
+  motor1Throttle = throttleToPWM(throttle1);
   motor2Throttle = throttleToPWM(throttle2);
+  pwmIntCalled = false;
 }
 
 // Function to handle tank drive logic
@@ -168,27 +170,25 @@ void handleTankDrive() {
   float m1 = x + y;  // Motor 1 throttle
   float m2 = x - y;  // Motor 2 throttle
 
-  // Only update if there is a significant change
-  if (abs(m1 - lastMotor1Throttle) > ZERO_THRESHOLD) {
-    setThrottle(m1, motorPin1);  // Set new desired throttle for motor 1
-    lastMotor1Throttle = m1;     // Store the last value for comparison
-  }
+  // human modified. removed 'big enough change" check
+  // pwm timer will keep it smooth enough. fixed use of
+  // setThrottle so it passes both motors, instead of
+  // throttle and motor pin.
 
-  if (abs(m2 - lastMotor2Throttle) > ZERO_THRESHOLD) {
-    setThrottle(m2, motorPin2);  // Set new desired throttle for motor 2
-    lastMotor2Throttle = m2;     // Store the last value for comparison
-  }
+  setThrottle(m1, m2);  // Set new desired throttle for motors
+  pwmIntCalled = false;
 }
 
 // Interrupt handler to send PWM signal (this triggers the actual motor control)
 void pwmInterruptHandler() {
-  // Convert throttle to PWM signal value
-  int pwmValueMotor1 = motor1Throttle;  // Convert desired throttle to PWM value
+  // Apply throttle to PWM signal value
+  int pwmValueMotor1 = motor1Throttle; 
   int pwmValueMotor2 = motor2Throttle;
 
   // Write the actual PWM value to the motors
   analogWrite(motorPin1, pwmValueMotor1);
   analogWrite(motorPin2, pwmValueMotor2);
+  pwmIntCalled = true;
 }
 
 // Initialize ESCs and set the throttle to 0
@@ -325,7 +325,6 @@ void setup() {
 
   // Initialize ESCs by sending zero throttle to both motors
   initESCs();
-  setThrottle(0, 0);  // Send 0 throttle to both motors
   Serial.println("ESCs initialized and motors stopped.");
 
   // Initialize accelerometer and collect calibration data
@@ -346,7 +345,9 @@ bool isThrottleNearlyZero() {
 
 // Function to check if in tank drive mode
 bool isInTankDriveMode() {
-  return (abs(throttle) < ZERO_THRESHOLD) && (abs(sidewaysInput) < ZERO_THRESHOLD);
+  // fixed sideways to check from left side instead of center. not sure why I missed this. ;/
+  float s = (1  + sidewaysInput);
+  return (throttle < ZERO_THRESHOLD) && (s < ZERO_THRESHOLD);
 }
 
 void updateInputs()
@@ -360,10 +361,12 @@ void updateInputs()
   stickHoriz = (horiz - 1500) / 500.0;
 
   // Calculate stick angle in radians as a fraction of a circle
-  stickAngle = atan2(stickVert, -stickHoriz) / (2 * PI);
+  // swapped sign of arguments so circle starts at top and goes clockwise on stick.
+  stickAngle = atan2(-stickVert, stickHoriz) / (2 * PI);
 
   // Calculate stick length (magnitude) using Pythagoras' theorem
-  stickLength = sqrt(sq(stickVert) + sq(stickHoriz)) / 500.0; // Normalize to 0-1
+  stickLength = sqrt(sq(stickVert) + sq(stickHoriz)); // [ removed / 500 as it's already normalized from -1 to 1]
+  if (stickLength > 1.0) stickLength = 1.0;
 
   // Read throttle (channel 2) and map it to 0 to 1
   throttle = (ibus.readChannel(2) - 1000) / 1000.0;
@@ -373,13 +376,13 @@ void updateInputs()
 
   // Read radius input (channel 4) and map it to 0.1cm to 10cm
   radiusInput = ibus.readChannel(4);
-  radiusSize = map(radiusInput, 1000, 2000, 0.001, 0.10) / 10.0; // Result in centimeters (0.1 to 10 cm)
+  radiusSize = map(radiusInput, 1000, 2000, 0.001, 0.10); // Result in centimeters (1mm to 10 cm)
 
   // Read LED offset input (channel 5).
-  headingOffset  = (ibus.readChannel(5) - 1000) / 1000.0; // fraction of the way around a circle the joystick points: offset used for moving
+  headingOffset  = (ibus.readChannel(5) - 1500) / 1000.0; // fraction of the way around a circle the joystick points: offset used for moving
 }
 
-
+// this function was human written i think, at least all the print parts.
 void handleIdle()
 {
 	static uint32_t lastIdleMessage = 0;
@@ -387,16 +390,17 @@ void handleIdle()
 	if(now - lastIdleMessage > 250)
 	{
 		lastIdleMessage = now;
-		// message stuff
-    Serial.printf("stickVert    : %f\t", (double)stickVert    );
-    Serial.printf("stickHoriz   : %f\t", (double)stickHoriz   );
-    Serial.printf("stickAngle   : %f\t", (double)stickAngle   );
-    Serial.printf("stickLength  : %f\t", (double)stickLength  );
-    Serial.printf("throttle     : %f\t", (double)throttle     );
-    Serial.printf("sidewaysInput: %f\t", (double)sidewaysInput);
-    Serial.printf("radiusInput  : %f\t", (double)radiusInput  );
-    Serial.printf("radiusSize   : %f\t", (double)radiusSize   );
-    Serial.printf("headingOffset: %f\n", (double)headingOffset);
+		
+    Serial.print("pwmIntCalled : "); Serial.print(pwmIntCalled);
+    Serial.print("\tstickVert    : "); Serial.print(stickVert    );
+    Serial.print("\tstickHoriz   : "); Serial.print(stickHoriz   );
+    Serial.print("\tstickAngle   : "); Serial.print(stickAngle   );
+    Serial.print("\tstickLength  : "); Serial.print(stickLength  );
+    Serial.print("\tthrottle     : "); Serial.print(throttle     );
+    Serial.print("\tsidewaysInput: "); Serial.print(sidewaysInput);
+    Serial.print("\tradiusInput  : "); Serial.print(radiusInput  );
+    Serial.print("\tradiusSize   : "); Serial.print(radiusSize   *100.0f);
+    Serial.print("cm\theadingOffset: "); Serial.println(headingOffset);
   }	
 }
 
@@ -414,7 +418,7 @@ float getSpinAcceleration() {
   float z = s.acceleration.z - accelOffsetZ;
 
   // Calculate the magnitude of the acceleration vector (centripetal force)
-  float spinAccel = sqrt(x * x + y * y + z * z);  // Ignore Z since it's aligned with gravity
+  float spinAccel = sqrt(x * x + y * y + z * z); 
 
   return spinAccel;  // This is the magnitude of the centripetal acceleration (in m/s²)
 }
@@ -509,7 +513,12 @@ void handleMeltybrainDrive() {
 
     // Calculate the adjusted heading
     float adjustedHeading = headingOffset + stickAngle;
-    if (adjustedHeading > 1.0) {
+    // human code: added check for negative offfset. if stickangle is to the left it will be negative.
+    // changed to while; input may have been close to -2.0. allows other modifiers
+    while (adjustedHeading < 1.0) {
+      adjustedHeading += 1.0; 
+    }
+    while (adjustedHeading > 1.0) {
       adjustedHeading -= 1.0;
     }
 
@@ -528,7 +537,7 @@ void handleMeltybrainDrive() {
     bool motor2Active = isWithinTimeslice(currentTimeMicros, timeToBackward, width, revTimeMicros);
 
     // Set the throttle for each motor using the global throttle value
-    setThrottle(motor1Active ? throttle : -throttle, motor2Active ? throttle : -throttle);
+    setThrottle(motor1Active ? throttle : -throttle, motor2Active ? -throttle : throttle); // switched signs for motor2.
 
     // Update the LEDs to visualize the current and adjusted heading
     bool blueLEDOn = isWithinTimeslice(currentTimeMicros, headingOffset * revTimeMicros, width, revTimeMicros);
@@ -546,16 +555,20 @@ void handleMeltybrainDrive() {
 void loop() {
   // Update the IBus object for Teensy
   ibus.loop();
-
   while(!rc_signal_is_healthy())
   {
     setRGB(0xdede,0x0000,0x8282);
     ibus.loop();
+    setThrottle(0,0);
+    delay(5); // stop the speedy scroll
+    handleIdle();
+
   }
   updateInputs();
   
   if(isInTankDriveMode())
   {
+    Serial.print("T"); // so we can tell
   	setRGB(0x0000, 0xaaf0, 0x550f); // blue and green alternating blinking
   	handleTankDrive();
   	delay(5); // give us time to do _something_
@@ -565,11 +578,13 @@ void loop() {
   if(isThrottleNearlyZero())
   {
     setRGB(0x0001, 0x1246, 0x1236);
-  	handleIdle();
+    // add code to do whatever stuff
+    // we should do when not moving.
   }
   else
   {
     setRGB(0,0,0);       // all off. at least as far as updateLEDs() is concerned.
   	handleMeltybrainDrive();
   }  
+  handleIdle();
 }
