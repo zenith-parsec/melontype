@@ -91,8 +91,8 @@ const int PWM_2000us = 65536 * 80 / 100; // 80% of a 2500us cycle = 2000us
 // Global variables for motor throttles
 float motor1Throttle = 0.0;
 float motor2Throttle = 0.0;
-float lastMotor1Throttle = -1.0; // make them different to get the update.
-float lastMotor2Throttle = -1.0; // ditto
+int lastMotor1 = -1; // make them different to get the update.
+int lastMotor2 = -1; // ditto. (renamed, sorry.)
 
 
 // Variables to store inputs
@@ -146,16 +146,27 @@ void updateLEDs() {
   i = (i + 1) & 0xF;
 }
 
+// map the throttle input so it spends more time in the low areas.
+float stretchThrottle(float throttle)
+{
+  float s = throttle > 0 ? 1.f : -1.f;
+  return s*(throttle * throttle);
+}
+
 int throttleToPWM(float throttle) {
   // Constrain the throttle value between 0 and 1
-  throttle = constrain(throttle, 0.0, 1.0);
-
-  // Map the throttle value (0 to 1) to the PWM duty cycle values (1000us and 2000us converted to the 400Hz PWM)
-  return map(throttle * 1000, -1000, 1000, PWM_1000us, PWM_2000us);
+  throttle = constrain(throttle, -1.0, 1.0);
+  throttle = stretchThrottle(throttle);
+  // Map the throttle value (-1 to 1) to the PWM duty cycle values (1000us and 2000us converted to the 400Hz PWM)
+  return map(throttle, -1, 1, PWM_1000us, PWM_2000us); // human simplified.
 }
 
 // Modified setThrottle to only store the desired throttle, no analogWrite() here
 void setThrottle(float throttle1, float throttle2) {
+  if(throttle1 == 0 && throttle2 == 0)
+  {
+    lastMotor1 = -1; lastMotor2 = -1; // force an update. hack. so? shut up.
+  }
   motor1Throttle = throttleToPWM(throttle1);
   motor2Throttle = throttleToPWM(throttle2);
   pwmIntCalled = false;
@@ -186,8 +197,16 @@ void pwmInterruptHandler() {
   int pwmValueMotor2 = motor2Throttle;
 
   // Write the actual PWM value to the motors
-  analogWrite(motorPin1, pwmValueMotor1);
-  analogWrite(motorPin2, pwmValueMotor2);
+  if(lastMotor1 != pwmValueMotor1)
+  {
+    analogWrite(motorPin1, pwmValueMotor1);
+    lastMotor1 = pwmValueMotor1;
+  }
+  if(lastMotor2 != pwmValueMotor2)
+  {
+    analogWrite(motorPin2, pwmValueMotor2);
+    lastMotor2 = pwmValueMotor1;
+  }
   pwmIntCalled = true;
 }
 
@@ -443,7 +462,7 @@ float calculateRPS() {
 
 
 // Constants
-const float RPS_THRESHOLD = 7.0;  // 7 revolutions per second = 420 RPM
+const float RPS_THRESHOLD = 4.0;  // 4 revolutions per second = 240 RPM 
 const unsigned long LOOP_DELAY_MICROS = 200;  // Delay for each loop iteration in microseconds
 
 // Variables
@@ -493,6 +512,7 @@ void handleMeltybrainDrive() {
 
   // If RPS is below the threshold, set motors to stay on indefinitely
   if (rps < RPS_THRESHOLD) {
+    setRGB(0x0a0a, 0xff00, 0x00ff);
     setThrottle(throttle, -throttle);  // Both motors on with throttle values
     delayMicroseconds(LOOP_DELAY_MICROS);  // Add delay before next iteration
     return;
@@ -530,7 +550,8 @@ void handleMeltybrainDrive() {
     }
 
     // Calculate width for motor activation checks
-    float width = 0.25 * stickLength * revTimeMicros;
+    float widthScale = max(stickLength, throttle); // human addition. was stickLength which doesn't make sense for not moving.
+    float width = 0.25 * widthScale * revTimeMicros;
 
     // Determine if the motors should be activated
     bool motor1Active = isWithinTimeslice(currentTimeMicros, timeToForward, width, revTimeMicros);
@@ -577,7 +598,7 @@ void loop() {
   
   if(isThrottleNearlyZero())
   {
-    setRGB(0x0001, 0x1246, 0x1236);
+    setRGB(0x0001, 0x0010, 0x1f00);
     // add code to do whatever stuff
     // we should do when not moving.
   }
