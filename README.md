@@ -3,10 +3,15 @@ melontype is an open source meltybrain library, collaboratively written with Cha
 
 * THIS IS NOT PRODUCTION QUALITY CODE
 * It most likely doesn't even work properly
-* it hasn't even been tested with ESCs plugged in.
 * use at your own risk.
 
-This is the transcript of me interacting with ChatGPT that resulted in this code.
+This code has now been tested, and it mostly works. There is some kind of issue with
+some of the code calculating the RPMs so it can't get "lock" when spinning yet.
+(If I knew exactly where the problem was, I'd have fixed it already. I've got to spend
+some time looking.)
+
+Here is the transcript of me interacting with ChatGPT that resulted in the first version
+of the code:
 
   https://chatgpt.com/share/67132632-9b8c-8000-8483-046ebea0f9ee
 
@@ -15,6 +20,7 @@ It wasn't just me saying "write me the code for a meltybrain combat robot."
 This transcript might help you understanding the code. You could just search for the 
 function name, for example. Some code has been modified from what the bot wrote, and
 I've done some clean up. 
+
 
 It took on the order of 10 hours to write, which is much faster than it would've taken
 me to get to this point. I got frustrated several times with the AI for not being able
