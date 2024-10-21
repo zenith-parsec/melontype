@@ -1,6 +1,6 @@
 # melontype
-melontype is an open source meltybrain library, collaboratively written with ChatGPT
-
+## melontype is an open source meltybrain library, collaboratively written with ChatGPT
+(see _Transcript of the coding session_ section for details.)
 
 * THIS IS NOT PRODUCTION QUALITY CODE
   * it has worked in testing
@@ -16,43 +16,58 @@ This code has now been tested, and it seems to work. It can get "lock" when spin
 and it demonstrated translation in a controlled direction after tuning earlier today in a 
 test box. (The noise was too much to test it for long late at night. More later.)
 
-## How to tune/configure the robot.
+------
 
-When spinning fast enough a blue arc appears indicating the front of the robot. 
+# Robot Tuning Instructions
 
-if you are spinning quite fast and see this arc holding still, and you push the right stick
-forward when and you move in the direction of the arc, then you are tuned. You should also 
-be able to drive in other directions using the right stick. And of course you should be able
-to turn the throttle up some more. You'll need to experiment to find the optimal spin speed
-for translation. I have no clue yet.
+## Power Up and Set Up
+- Ensure your transmitter is configured correctly:
+  - **Channel 5** is mapped to a potentiometer (dial).
+  - **Channel 6** is mapped to another potentiometer (dial).
+- Make sure the robot is powered on and ready to spin.
 
-to spin fast enough push the left stick (channel 3) up slightly from the bottom, increasing 
-it until you can only see blue LEDs. If you can see green LEDs it is not going fast enough yet.
+## Start Spinning
+- Use **Channel 3** (left stick) to control the spinning speed:
+  - Push the stick up slightly from the bottom to start the spin. Gradually increase until you only see blue LEDs near the edges of the robot.
+  - If green LEDs are visible, the robot is not spinning fast enough. Continue increasing the throttle until only blue LEDs are visible.
 
-if you think are already going fast enough and the green LED is still on, if input 5 is really 
-low, try turning it up some. eventually the lights should be only blue. at worst, turn it up 
-all the way and it should turn on way earlier... but then you'll have to adjust the throttle
-as you go, so aim for having it close to the correct value. ;]
+## Fine-Tuning LED Color
+- If the robot is spinning fast but you still see green LEDs, adjust **Channel 5** (mapped to a dial):
+  - Turn the dial up slowly until only blue LEDs are visible.
+  - If you can't eliminate the green LEDs, try turning **Channel 5** all the way up to trigger the blue LEDs earlier, then adjust the throttle to fine-tune the speed.
 
-when the LEDs are only blue, if they are sitting stationary, you are at least partially tuned. 
+## Check the Blue Arc
+- When the robot is spinning fast enough (only blue LEDs visible), observe the blue arc:
+  - If the arc is stationary, you are at least partially tuned.
+  - The blue arc indicates the **front of the robot**.
 
-To stop the blue leds from spinning, adjust the input on channel 5 (map channel 5 to a 
-potentiometer/dial in your transmitter config). Channel 5 tells the robot how far away the 
-accelerometer is from the center of rotation. It varies from 1mm to 100mm.
+## Movement Test
+- Push the **right stick (Channel 1)** forward:
+  - The robot should move in the direction of the blue arc (forward).
+  - If the robot moves correctly, you are tuned. You should also be able to move in other directions using the right stick.
+  - Experiment to find the optimal spin speed for smooth translation.
 
-The blue arc is supposed to be the front of the robot. When you press the right stick forward,
-the robot should move forward. 
+## Adjust for Incorrect Movement
+- If the robot moves in the wrong direction:
+  - Use **Channel 6** (the other dial) to rotate the blue arc:
+    - Adjust the dial to rotate the blue indicator (the front of the robot) to point in the correct direction. The input ranges from **-180° to 180°**.
+    - If you need to rotate further, turn the dial all the way around to reset the direction and complete one full revolution.
 
-If the robot moves in another direction, use the channel 6 input to rotate the indicator so it
-points in the right direction. The input value ranges from -180 degrees to 180 degrees. If you
-need to rotate further, first rotate it all the way back around. This moves one revolution 
-back around the robot. I map this input to a the other dial on my transmitter.
+## Tuning Recap
+- **Channel 5** adjusts the distance between the accelerometer and the center of rotation (1mm to 100mm).
+- **Channel 6** adjusts the orientation of the blue arc to align the robot’s front with its direction of movement.
+
+## Final Adjustments
+- Continue tweaking **Channel 5** for the optimal LED response and **Channel 6** for alignment, as necessary.
+- Once properly tuned, the robot should move smoothly and consistently in the direction of the blue arc.
+
 
 (note to self: add transmitter to list of parts: FS-i6)
 
 TODO: images would show some ideas better
 
-## Transcript of the coding session
+------
+# Transcript of the coding session
 Here is the transcript of me interacting with ChatGPT that resulted in the first version
 of the code:
 
@@ -71,7 +86,8 @@ to do anything right.
 This is also the 2nd attempt at doing it, and it's only as good (ha!) as it
 is because I learned so much from how badly it did with the first attempt.
 
-## comments from initial commit
+------
+# comments from initial commit
 below is the comment From the top of the source file when I initially committed it.
 this comment is out of date, and reflects the initial commit state of the code
 the current comment is likely to shrink as things are documented elsewhere and
