@@ -1,15 +1,58 @@
 # melontype
 melontype is an open source meltybrain library, collaboratively written with ChatGPT
 
+
 * THIS IS NOT PRODUCTION QUALITY CODE
-* It most likely doesn't even work properly
-* use at your own risk.
+  * it has worked in testing
+    * it still needs a lot more testing
+      * **it might not work properly** all the time.
+  * **Use at your own risk!**
 
-This code has now been tested, and it mostly works. There is some kind of issue with
-some of the code calculating the RPMs so it can't get "lock" when spinning yet.
-(If I knew exactly where the problem was, I'd have fixed it already. I've got to spend
-some time looking.)
+* NOT FOR USE IN MEDICAL OR MILITARY APPLICATIONS.
+  * it's probably a bad idea for everyone.
 
+## Current status
+This code has now been tested, and it seems to work. It can get "lock" when spinning now, 
+and it demonstrated translation in a controlled direction after tuning earlier today in a 
+test box. (The noise was too much to test it for long late at night. More later.)
+
+## How to tune/configure the robot.
+
+When spinning fast enough a blue arc appears indicating the front of the robot. 
+
+if you are spinning quite fast and see this arc holding still, and you push the right stick
+forward when and you move in the direction of the arc, then you are tuned. You should also 
+be able to drive in other directions using the right stick. And of course you should be able
+to turn the throttle up some more. You'll need to experiment to find the optimal spin speed
+for translation. I have no clue yet.
+
+to spin fast enough push the left stick (channel 3) up slightly from the bottom, increasing 
+it until you can only see blue LEDs. If you can see green LEDs it is not going fast enough yet.
+
+if you think are already going fast enough and the green LED is still on, if input 5 is really 
+low, try turning it up some. eventually the lights should be only blue. at worst, turn it up 
+all the way and it should turn on way earlier... but then you'll have to adjust the throttle
+as you go, so aim for having it close to the correct value. ;]
+
+when the LEDs are only blue, if they are sitting stationary, you are at least partially tuned. 
+
+To stop the blue leds from spinning, adjust the input on channel 5 (map channel 5 to a 
+potentiometer/dial in your transmitter config). Channel 5 tells the robot how far away the 
+accelerometer is from the center of rotation. It varies from 1mm to 100mm.
+
+The blue arc is supposed to be the front of the robot. When you press the right stick forward,
+the robot should move forward. 
+
+If the robot moves in another direction, use the channel 6 input to rotate the indicator so it
+points in the right direction. The input value ranges from -180 degrees to 180 degrees. If you
+need to rotate further, first rotate it all the way back around. This moves one revolution 
+back around the robot. I map this input to a the other dial on my transmitter.
+
+(note to self: add transmitter to list of parts: FS-i6)
+
+TODO: images would show some ideas better
+
+## Transcript of the coding session
 Here is the transcript of me interacting with ChatGPT that resulted in the first version
 of the code:
 
@@ -21,7 +64,6 @@ This transcript might help you understanding the code. You could just search for
 function name, for example. Some code has been modified from what the bot wrote, and
 I've done some clean up. 
 
-
 It took on the order of 10 hours to write, which is much faster than it would've taken
 me to get to this point. I got frustrated several times with the AI for not being able
 to do anything right. 
@@ -29,7 +71,13 @@ to do anything right.
 This is also the 2nd attempt at doing it, and it's only as good (ha!) as it
 is because I learned so much from how badly it did with the first attempt.
 
-From the top of the source file when I initially committed it:
+## comments from initial commit
+below is the comment From the top of the source file when I initially committed it.
+this comment is out of date, and reflects the initial commit state of the code
+the current comment is likely to shrink as things are documented elsewhere and
+problems are solved. 
+
+
 ```
 // this is terrible code.
 // not even being self-deprecating.
