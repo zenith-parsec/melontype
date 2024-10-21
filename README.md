@@ -35,6 +35,7 @@ test box. (The noise was too much to test it for long late at night. More later.
 - If the robot is spinning fast but you still see green LEDs, adjust **Channel 5** (mapped to a dial):
   - Turn the dial up slowly until only blue LEDs are visible.
   - If you can't eliminate the green LEDs, try turning **Channel 5** all the way up to trigger the blue LEDs earlier, then adjust the throttle to fine-tune the speed.
+- If you only see blue LEDs but they are spinning relative to the robot, adjust **Channel 5**. Turning the dial one way should speed them up, and the other will slow them down.
 
 ## Check the Blue Arc
 - When the robot is spinning fast enough (only blue LEDs visible), observe the blue arc:
