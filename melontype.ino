@@ -168,15 +168,16 @@ void initLEDs() {
   digitalWrite(greenPin, LOW);
   digitalWrite(bluePin, LOW);
 
-  // Start the timer to call updateLEDs() every 32 milliseconds
-  ledTimer.begin(updateLEDs, 32000);  // 32,000 microseconds = 32 milliseconds
+  // Start the timer to call updateLEDs() regularly
+  ledTimer.begin(updateLEDs, 50000);  // 50,000 microseconds = 50 milliseconds
 
-  Serial.println("LEDs initialized with 32ms interval timer.");
+  Serial.println("LEDs initialized in interval timer.");
 }
 
 // Function to set the RGB LED states
 void setRGB(uint16_t r, uint16_t g, uint16_t b) {
   // Update the red, green, and blue states with the provided values
+
   redState = r;
   greenState = g;
   blueState = b;
@@ -223,10 +224,44 @@ void setThrottle(float throttle1, float throttle2, bool stretch = true) {
   pwmIntCalled = false;
 }
 
+
+
+// Constants
+const float boostThreshold = 0.2;      // Minimum throttle value for motor to start spinning
+const float boostSpeed = 0.5;       // Throttle output during "on" period when modulating
+const unsigned long baseCycleTime = 50;  // Base cycle time in milliseconds
+
+unsigned long endBoost[2] = {0, 0};
+bool isBoost[2] = {true,true}; // Flag to track whether we're sending modSpeed or 0
+
+// Function to modulate throttle for low-speed control
+float modulateThrottle(float inputThrottle, int idx) 
+{
+  unsigned long now = millis();
+  if(now > endBoost[idx] + 100)
+  {
+    endBoost[idx] = 0;
+    return inputThrottle;
+  }
+  if(now > endBoost[idx] || inputThrottle > boostThreshold) 
+  {
+    isBoost[idx] = false;
+    return inputThrottle;
+  }
+  if(endBoost[idx] == 0)
+  {
+    isBoost[idx] = true;
+    endBoost[idx] = now + baseCycleTime;
+  }
+  if(!isBoost[idx])return inputThrottle;
+  return boostSpeed;
+}
+
+
 // Function to handle tank drive logic
 void handleTankDrive() {
-  float x = stickHoriz;  // Horizontal stick input
-  float y = stickVert;   // Vertical stick input
+  float x = stickHoriz / 5.0;  // Horizontal stick input 0 - 0.2
+  float y = stickVert  / 5.0;  // Vertical stick input   0 - 0.2
 
   // Calculate motor control values based on stick input
   float m1 = x + y;  // Motor 1 throttle
@@ -237,8 +272,12 @@ void handleTankDrive() {
   // setThrottle so it passes both motors, instead of
   // throttle and motor pin.
 
-  setThrottle(m1, m2, false);  // Set new desired throttle for motors
+  // this one is for trying to stop it taking off so fast in tank mode.
+  m1 = modulateThrottle(m1, 0);
+  m2 = modulateThrottle(m2, 1);
+
   pwmIntCalled = false;
+  setThrottle(m1, m2, false);  // Set new desired throttle for motors
 }
 
 // Interrupt handler to send PWM signal (this triggers the actual motor control)
@@ -297,9 +336,7 @@ void collectCalibrationData() {
   Serial.println("about to start calibration... oh noes!");
   // Set LEDs to blink a low-level warning for 2 seconds
   setRGB(0x6666, 0x9999, 0x0000);  // 0b0110011001100110, 0b1001100110011001, 0b0000000000000000
-  for (int i = 0; i < 62; i++) {   // ~2 seconds (62 calls at 32ms each)
-    delay(32);
-  }
+  delay(2000); // LEDs will still blink
   Serial.println("Starting calibration. Keep still.");
   // Set LEDs to blink twice as fast while calibrating
   setRGB(0x5555, 0xAAAA, 0x0000);  // 0b0101010101010101, 0b1010101010101010, 0b0000000000000000
@@ -407,14 +444,14 @@ void setup() {
 
 // Function to check if throttle is nearly zero
 bool isThrottleNearlyZero() {
-  return abs(throttle) < ZERO_THRESHOLD;
+  return throttle < ZERO_THRESHOLD;
 }
 
 // Function to check if in tank drive mode
 bool isInTankDriveMode() {
   // fixed sideways to check from left side instead of center. not sure why I missed this. ;/
-  float s = (1 + sidewaysInput);
-  return (throttle < ZERO_THRESHOLD) && (s < ZERO_THRESHOLD);
+  float s = (0.95 + sidewaysInput);
+  return isThrottleNearlyZero() && (s < 0.25);
 }
 
 void updateInputs() {
@@ -428,13 +465,13 @@ void updateInputs() {
 
   // Calculate stick angle in radians as a fraction of a circle
   // swapped sign of arguments so circle starts at top and goes clockwise on stick.
-  stickAngle = atan2(-stickVert, stickHoriz) / (2 * PI);
+  stickAngle = atan2(-stickVert, stickHoriz) / (2 * PI); 
 
   // Calculate stick length (magnitude) using Pythagoras' theorem
   stickLength = sqrt(sq(stickVert) + sq(stickHoriz));  // [ removed / 500 as it's already normalized from -1 to 1]
   stickLength /= 1.4142135623;                         // divide by sqrt(2) to put it into 0..1 range
 
-  if (stickLength < 0.01) {
+  if (stickLength < 0.05) {
     stickAngle = 0;
     stickLength = 0;
   }
@@ -483,6 +520,12 @@ void displayState() {
   }
 }
 
+// Apply a low-pass filter to the accelerometer reading
+float lowPassFilter(float currentReading, float previousFilteredReading, float alpha) {
+    return alpha * currentReading + (1.0 - alpha) * previousFilteredReading;
+}
+float filterAlpha = 0.2;
+float previousFilteredReading = 0.0;
 
 
 // Function to get the magnitude of the acceleration due to spinning (centripetal force)
@@ -498,6 +541,8 @@ float getSpinAcceleration() {
 
   // Calculate the magnitude of the acceleration vector (centripetal force)
   float spinAccel = sqrt(x * x + y * y + z * z);
+  spinAccel = lowPassFilter(spinAccel, previousFilteredReading, filterAlpha);
+  previousFilteredReading = spinAccel;
   return spinAccel;  // This is the magnitude of the centripetal acceleration (in m/s²)
 }
 
@@ -527,33 +572,18 @@ const unsigned long LOOP_DELAY_MICROS = 200;  // Delay for each loop iteration i
 // Variables
 unsigned long usRevStartTime = 0;  // Time in microseconds when the revolution started
 
-// Generalized function to determine if the current time is within a time slice
-bool isWithinTimeslice(float currentTime, float targetTime, float width, float revDuration) {
-  float startTime = targetTime - width;
-  float endTime = targetTime + width;
-
-  // Correct for wrapping around the revolution time
-  if (startTime < 0) {
-    startTime += revDuration;
-  }
-  if (endTime >= revDuration) {
-    endTime -= revDuration;
-  }
-
-  // Check if current time is within the pulse time
-  return isPulseTime(currentTime, startTime, endTime, revDuration);
-}
-
-// Function to determine if the motors should be pulsed on
-bool isPulseTime(float currentTime, float startTime, float endTime, float revDuration) {
-  if (startTime > endTime) {
-    // Case when the start time is after the end time
-    return (currentTime >= startTime || currentTime <= endTime);
-  } else {
-    // Case when the start time is before the end time
-    return (currentTime >= startTime && currentTime <= endTime);
-  }
-}
+// this is now human edited. it's become more human than machine. the AI version did what I asked for
+// but it turns out I should've researched more meltybrain code before writing this than just openmelt2. 
+//
+// TODO: research more meltybrain code than just openmelt2.
+//
+// After multiple people I talked about it with seemed more confused by the code than I expected, I 
+// apparently learned that this form of pulsing the motors isn't the usual way? well, it's not the 
+// only way of doing it. ramping the speed so you spend 1/2 the time speeding up and 1/2 the time
+// slowing down are the norm, or something? Still haven't checked linear ramps. 
+//
+//  implemented a sinusoidal ramping function locked to the current predicted phase. 
+// once the bot is spinning fast enough (##undefined variable used##) this should keep it spinning at the same speed 
 
 void handleMeltybrainDrive() {
   // Calculate revolutions per second (RPS)
@@ -583,7 +613,7 @@ void handleMeltybrainDrive() {
     }
 
     // Calculate the adjusted heading
-    float adjustedHeading = headingOffset + stickAngle;
+    float adjustedHeading = headingOffset - stickAngle;
 
     // human code: added check for negative offfset. if stickangle is to the left it will be negative.
     // also changed if to while in next one; input may have been close to -2.0 or 2.0. loop allows other modifiers
@@ -605,21 +635,36 @@ void handleMeltybrainDrive() {
 
     // Calculate width for motor activation checks
     float widthScale = max(stickLength, throttle);  // human addition. was stickLength which doesn't make sense for not moving.
-    float width = 0.25 * widthScale * revTimeMicros;
-
     
     // Set the throttle for each motor using the global throttle value
     // modulated by a cosine function
     float ph1 = ( (currentTimeMicros + timeToForward  ) / revTimeMicros) * M_PI * 2.0f;
     float ph2 = ( (currentTimeMicros + timeToBackward ) / revTimeMicros) * M_PI * 2.0f;
-    float th1 = max(0, (cos(ph1) * 0.125f * stickLength) ) + throttle;
-    float th2 = max(0, (cos(ph2) * 0.125f * stickLength) ) + throttle;
+    float cos_ph1 = cos(ph1);
+    float cos_ph2 = cos(ph2);
+    float th1 = max(0, (cos_ph1 * 0.25f * stickLength) + throttle);
+    float th2 = max(0, (cos_ph2 * 0.25f * stickLength) + throttle);
 
     setThrottle(th1, -th2);  // switched signs for motor2. 
 
-    // Update the LEDs to visualize the current --and adjusted heading--
-    bool blueLEDOn = isWithinTimeslice(currentTimeMicros, headingOffset * revTimeMicros, width, revTimeMicros);
-    //bool greenLEDOn = isWithinTimeslice(currentTimeMicros, adjustedHeading * revTimeMicros, width, revTimeMicros);
+    // Update the LEDs to visualize the current heading. 
+    // ph1 is the center front of the orbit. 
+    // cos(ph1) (multiply by 360 or 2pi for angle from the center front quadrant)
+    // 0.000: 1.0000
+    // 0.125: 0.7071
+    // 0.250: 0.0000
+    // 0.375:-0.7071
+    // 0.500:-1.0000
+    // 0.625:-0.7071
+    // 0.750: 0.0000
+    // 0.875: 0.7071
+    // 1.000: 1.0000
+    // the values for the region 45 degrees each side of center front are all greater
+    // than 0.7071. This would illuminate 1/4 of the arc for that section of the 
+    // revolution. 
+
+    // coincides with motor pulses.
+    bool blueLEDOn = cos_ph1 > 0.7071 * ( 1.4 - widthScale * 0.9 );
 
     digitalWrite(bluePin, blueLEDOn);
     // digitalWrite(greenPin, greenLEDOn);
@@ -643,7 +688,7 @@ void loop() {
   updateInputs();
 
   if (isInTankDriveMode()) {
-    setRGB(0x0000, 0xaaf0, 0x550f);  // blue and green alternating blinking
+    setRGB(0x00ff, 0x00ff, 0x00ff);  // all LEDs blinking so you can tell
     handleTankDrive();
     delay(5);  // give us time to do _something_
     displayState();
