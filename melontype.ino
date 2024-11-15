@@ -1,126 +1,22 @@
-// this is terrible code. not even being self-deprecating.
-// so use this at your own risk.
+// this is terrible code. not even being self-deprecating. so use this at your own risk.
+// read the line above this again, and if you keep going, remember that it's all your fault now.
 
-// as of 10/21/2024 this code actually works!
-
-// I have actually tested it now and after various tweaks have had the robot
-// translate! It seemed quite stable. There isn't much room in my test box to
-// see how stable it is before it hits a wall. (it's well after midnight and
-// i live in an apartment complex. ;/ it sounds like a power tool or hammering
-// when it hits the walls.)
-// The robot is also somewhat off balance because it has a larger than normal
-// brain board in it, sitting on an angle with the battery butted up against it.
-// The new brain board is 1/2 the side of this one and let the battery sit in
-// the middle of the body which wil help balance. I hope that also stops the
-// translational drift. (That also could be coz the test box isn't level. I'll
-// check next time I set it up.)
-
-// This code was written by me, zenith-parsec, and ChatGPT using the GPT-4o model.
-// For a transcript of the chat that resulted in most of the code (first commit)
-// look at:
-//
-//     https://chatgpt.com/share/67132632-9b8c-8000-8483-046ebea0f9ee
-//
-// Testing was performed using "the arena floor", a 3lb class combat robot.
-//
-// - FPVDrone Fli14+ 14CH Mini Receiver 2A
-// https://www.amazon.com/dp/B086W6LG8Z
-// - Adafruit H3LIS331 accelerometer
-// https://www.adafruit.com/product/4627
-// - 2 x Repeat AM32 Drive ESC
-// https://repeat-robotics.com/buy/am32/
-// - Teensy 4.0 (which runs this code)
-// https://www.pjrc.com/store/teensy40.html
-// - FlySky FS-i6 transmitter
-// available everywhere. I got mine on Amazon, but the listing I used was only reasonably priced because it was on sale. not linking it.
-// = red, green, and blue indicator LEDs. one each of for top (and bottom if you are invertible)
-// - 2 x brushless motors (I'm embarrassed to tell you how big mine are. Or where I got them. You don't need to be like me.)
-// - 2 x wheels and mounting hardware
-// [what I used] https://itgresa.com/product/banebots-t81-wheels/ and https://itgresa.com/product/banebots-t81-hubs/
-//   - these are quite heavy wheels, but they get good grip. I got 50A for my bot. They work, but there are probably lighter wheels that perform better.
-// - an approptiate battery
-//   - 3S 750mAh LiPo seems ok so far?
-//   - https://www.amazon.com/dp/B097BWZTVW hasn't caught fire yet.
-// - a body to mount these things on.
-//   - CAD done by me in the US. Milling done by JLCPCB in China.
-//     - CAD was cheap
-//     - getting parts machined when you have zero machining knowledge is not cheap.
-//       - definitely watch some YouTube videos on it. Or don't do it, and do something in TPU. I don't care.
-// - various connectors and tools
-//   - soldering iron and consumables.
-//   - wires of various thickness, along with ways to trim and strip them.
-//   - appropriate connectors for ESC to motors.
-//   - screws/bolts/etc and tools
-//   - a USB mini cable for the Teensy.
-//   - a pair of wheel clip pliers.
-//   - a multimeter/oscilliscope/other way of detecting voltage
-//   - a computer with the Internet and a USB port. (not always essential, but may help if you think you can fix something in software)
-// - patience and humility.
-//   - this will not work first try.
-//     - this may or may not be your fault.
-//   - violence is not the answer
-//     - while your robot might be designed to be tough and resilient, it's best not to see how it deals with being thrown across the room.
-//       - you may be wrong about how strong it is.
-//       - it may land on a weak point.
-//       - your room might not be as strong as your robot.
-
-// Design and use tips
-
-// The receiver should connect to RX2 (pin 7) of the Teensy and a common ground pin.
-// The signal pins from the ESCs should be connected to pins 2 and 3, and the ground
-// pins to ground.
-
-// I use a custom circuit board to hold things together, but it's still evolving
-// so I won't share it yet.
-
-// The robot should have red, green, and blue LEDs (all with resistors) on -ve side
-// of the appropriately named ports. The other side should be connected to 5v.
-// The logic driving the LEDs in updateLEDs is inverted, with literal 1 turning the
-// LED off, and a 0 turning it on. Red LEDs have fwd voltage of about 1.6-2.2v, but
-// we are connecting the negative lead to 3.3v, and the positive lead to 5v. With
-// the negative lead supplying 3.3v, the potential difference over the LED is only
-// 1.7v, which isn't enough to brightly light up a red LED, and nowhere near enough
-// to light up a green or blue one. When the LED pin goes to 0v, the difference
-// becomes 5v, and all the LEDs are brightly illuminated. This is probably bad
-// for the Teensy.
-
-// the IBus connection needs a hardware serial port. The IBusBM library doesn't
-// support Teensy by default: it does compile, but it sends a warning message.
-// I couldn't easily add perfect support, but I removed the warning part in the
-// begin() method about being an unsupported board so it compiles cleanly, and
-// I call the ibus.loop() method manually. (it might already be called on the timer
-// I added as well, but I have no idea how to tell at the moment.) It's not like
-// this makes the code any worse.
+// previous header comment/documentation is now in "original_header.h"
 
 #include <IBusBM.h>
 #include "Adafruit_H3LIS331.h"
+#include "SpeedCalibration.h"
+#include "config.h"
+#include "LED.h"
 
 // Declare objects and variables
 IBusBM ibus;                           // IBus object for the radio receiver
-HardwareSerial &serialPort = Serial2;  // Use Serial1 for IBus communication (adjust as needed)
+HardwareSerial &iBusSerialPort = Serial2;  // Use Serial1 for IBus communication (adjust as needed)
 Adafruit_H3LIS331 lis = Adafruit_H3LIS331();
 
-// Define the ESC servo rate (typically 50Hz for most ESCs)
-const int ESC_SERVO_RATE = 400;
+// for learning how it throttle maps
+SpeedCalibration calibration;
 
-const float ZERO_THRESHOLD = 0.1;  // Threshold for detecting significant change. This is usually between -1 and 1 so 1/20th each step
-
-// Pin definitions for motor outputs
-const int motorPin1 = 2;  // pin for motor 1
-const int motorPin2 = 3;  // pin for motor 2
-
-// Pin definitions for the RGB LED channels
-const int redPin   = 14;  //  pin for red channel
-const int greenPin = 15;  //  pin for green channel
-const int bluePin  = 16;  // pin for blue channel
-
-// Variables to store the current LED states (16-bit values)
-volatile uint16_t redState   = 0xAAAA;  // Example pattern for red (alternates on/off)
-volatile uint16_t greenState = 0x0F0F;  // Example pattern for green (on/off in 128ms blocks)
-volatile uint16_t blueState  = 0xFFFF;  // Example pattern for blue (always on)
-
-// IntervalTimer objects
-IntervalTimer ledTimer;
 IntervalTimer pwmTimer;
 bool pwmIntCalled;
 
@@ -132,10 +28,6 @@ float accelOffsetZ;
 volatile uint32_t last_ibus_seen_millis;
 volatile uint8_t last_cnt_rec;
 volatile uint8_t last_cnt_poll;
-
-// PWM frequency is 400Hz, so 1 cycle is 2500us.
-const int PWM_1000us = 65536 * 40 / 100;  // 40% of a 2500us cycle = 1000us
-const int PWM_2000us = 65536 * 80 / 100;  // 80% of a 2500us cycle = 2000us
 
 // Global variables for motor throttles
 float motor1Throttle = 0.0;
@@ -152,49 +44,9 @@ volatile float stickLength = 0.0;    // Length of the stick vector
 volatile float throttle = 0.0;       // Throttle input = ch2
 volatile float sidewaysInput = 0.0;  // Sideways input = ch3
 volatile float radiusInput = 0.0;    // Radius input = ch4
-volatile float radiusSize = 0.01;    // Mapped radius size (0.1 cm to 10 cm) in meters
+volatile float radiusSize = 0.01;    // Mapped radius size (0.1 cm to 20 cm) in meters
 volatile float headingOffset = 0.0;  // offset around circle heading light should be = ch5
-
-
-
-void initLEDs() {
-  // Configure the LED pins as outputs
-  pinMode(redPin, OUTPUT);
-  pinMode(greenPin, OUTPUT);
-  pinMode(bluePin, OUTPUT);
-
-  // Set initial LED states (off)
-  digitalWrite(redPin, LOW);
-  digitalWrite(greenPin, LOW);
-  digitalWrite(bluePin, LOW);
-
-  // Start the timer to call updateLEDs() regularly
-  ledTimer.begin(updateLEDs, 50000);  // 50,000 microseconds = 50 milliseconds
-
-  Serial.println("LEDs initialized in interval timer.");
-}
-
-// Function to set the RGB LED states
-void setRGB(uint16_t r, uint16_t g, uint16_t b) {
-  // Update the red, green, and blue states with the provided values
-
-  redState = r;
-  greenState = g;
-  blueState = b;
-}
-
-// Function to update the LED states based on bit patterns
-void updateLEDs() {
-  static uint8_t i = 0;  // Static variable to track the current bit (0-15)
-
-  // Set the LED values based on the i-th bit of each state's bitmask
-  digitalWrite(redPin, !((redState >> i) & 0x1));      // Red LED
-  digitalWrite(greenPin, !((greenState >> i) & 0x1));  // Green LED
-  digitalWrite(bluePin, !((blueState >> i) & 0x1));    // Blue LED
-
-  // Increment i and mask with 0xF to keep it within 0-15 (16 steps)
-  i = (i + 1) & 0xF;
-}
+volatile bool loggingSwitch = false; // should the calibration logging happen?
 
 // map the throttle input so it spends more time in the low areas.
 float stretchThrottle(float throttle) {
@@ -207,10 +59,10 @@ int throttleToPWM(float throttle, bool stretch) {
   throttle = constrain(throttle, -1.0, 1.0);
   // do non-linear stretch or not?
   if (stretch) {
-    throttle = stretchThrottle(throttle);
+    // throttle = stretchThrottle(throttle);
   }
   // Map the throttle value (-1 to 1) to the PWM duty cycle values (1000us and 2000us converted to the 400Hz PWM)
-  return map(throttle, -1, 1, PWM_1000us, PWM_2000us);  // human simplified.
+  return map(throttle, -1, 1, PWM_1000us, PWM_2000us);
 }
 
 // Modified setThrottle to only store the desired throttle, no analogWrite() here
@@ -225,35 +77,27 @@ void setThrottle(float throttle1, float throttle2, bool stretch = true) {
 }
 
 
-
-// Constants
-const float boostThreshold = 0.2;      // Minimum throttle value for motor to start spinning
-const float boostSpeed = 0.5;       // Throttle output during "on" period when modulating
-const unsigned long baseCycleTime = 50;  // Base cycle time in milliseconds
-
-unsigned long endBoost[2] = {0, 0};
-bool isBoost[2] = {true,true}; // Flag to track whether we're sending modSpeed or 0
+unsigned long endBoost[2] = { 0, 0 };
+bool isBoost[2] = { true, true };  // Flag to track whether we're sending modSpeed or 0
 
 // Function to modulate throttle for low-speed control
-float modulateThrottle(float inputThrottle, int idx) 
-{
+// this is intended to give a small boost when starting up if the throttle is below 0.2
+// to make it easier to keep moving at low speed.
+float modulateThrottle(float inputThrottle, int idx) {
   unsigned long now = millis();
-  if(now > endBoost[idx] + 100)
-  {
+  if (now > endBoost[idx] + coolDownTime) {
     endBoost[idx] = 0;
     return inputThrottle;
   }
-  if(now > endBoost[idx] || inputThrottle > boostThreshold) 
-  {
+  if (now > endBoost[idx] || inputThrottle > boostThreshold) {
     isBoost[idx] = false;
     return inputThrottle;
   }
-  if(endBoost[idx] == 0)
-  {
+  if (endBoost[idx] == 0) {
     isBoost[idx] = true;
     endBoost[idx] = now + baseCycleTime;
   }
-  if(!isBoost[idx])return inputThrottle;
+  if (!isBoost[idx]) return inputThrottle;
   return boostSpeed;
 }
 
@@ -261,16 +105,11 @@ float modulateThrottle(float inputThrottle, int idx)
 // Function to handle tank drive logic
 void handleTankDrive() {
   float x = stickHoriz / 5.0;  // Horizontal stick input 0 - 0.2
-  float y = stickVert  / 5.0;  // Vertical stick input   0 - 0.2
+  float y = stickVert / 5.0;   // Vertical stick input   0 - 0.2
 
   // Calculate motor control values based on stick input
   float m1 = x + y;  // Motor 1 throttle
   float m2 = x - y;  // Motor 2 throttle
-
-  // human modified. removed 'big enough change" check
-  // pwm timer will keep it smooth enough. fixed use of
-  // setThrottle so it passes both motors, instead of
-  // throttle and motor pin.
 
   // this one is for trying to stop it taking off so fast in tank mode.
   m1 = modulateThrottle(m1, 0);
@@ -315,18 +154,32 @@ void initESCs() {
   Serial.println("ESCs initialized, throttle set to 0.");
 }
 
+void checkSerial()
+{
+  if (Serial.available()) {
+    char cmd = Serial.read();
+    if (cmd == 'p') {
+      calibration.printCalibration();
+    }
+    if (cmd == 'c') {
+      calibration.initializeArray();
+    }
+  }
+}
 
 void initAccel() {
   if (!lis.begin_I2C()) {
-    Serial.println("Failed to initialize accelerometer! System halt.");
+    Serial.println("Failed to initialize accelerometer!");
+    Serial.println("Send p to print calibration data or c to clear.");
+
     setRGB(0x7777, 0x8888, 0x0000);  // rrrgrrrgrrrgrrrg
-    while (1)
+    while (1) checkSerial();
       ;  // Stop the system if the accelerometer initialization fails
   }
 
   // Configure the accelerometer settings
   lis.setDataRate(LIS331_DATARATE_400_HZ);
-  lis.setRange(H3LIS331_RANGE_100_G);
+  lis.setRange(H3LIS331_RANGE_200_G);
   lis.setLPFCutoff(LIS331_LPF_292_HZ);
 
   Serial.println("Accelerometer initialized successfully.");
@@ -336,7 +189,7 @@ void collectCalibrationData() {
   Serial.println("about to start calibration... oh noes!");
   // Set LEDs to blink a low-level warning for 2 seconds
   setRGB(0x6666, 0x9999, 0x0000);  // 0b0110011001100110, 0b1001100110011001, 0b0000000000000000
-  delay(2000); // LEDs will still blink
+  delay(2000);                     // LEDs will still blink
   Serial.println("Starting calibration. Keep still.");
   // Set LEDs to blink twice as fast while calibrating
   setRGB(0x5555, 0xAAAA, 0x0000);  // 0b0101010101010101, 0b1010101010101010, 0b0000000000000000
@@ -393,13 +246,13 @@ bool rc_signal_is_healthy() {
 
 void initIBus() {
   // Initialize the radio receiver using the IBusBM library
-  ibus.begin(serialPort);  // Start IBus communication
+  ibus.begin(iBusSerialPort);  // Start IBus communication
   Serial.println("IBus receiver initialized.");
   ibus.loop();  // get the first value?
 
   // Validate that commands are being received
   while (!ibus.readChannel(0)) {
-    setRGB(0xf0f6, 0x0000, 0x0f00);  // red long on, long off, long on, very short off, short on, very short off. blue blinks during first gap.
+    setRGB(0xf0f6, 0x0001, 0x0f00);  // red long on, long off, long on, very short off, short on, very short off. blue blinks during first gap.
     Serial.println("Waiting for remote signal...");
     ibus.loop();  // trying to update values
     delay(100);   // stop spamming serial
@@ -408,13 +261,15 @@ void initIBus() {
 
   // Ensure that throttle is in the down position (assuming throttle is on channel 2)
   int throttle = ibus.readChannel(2);
-  while (throttle > 1050) {
+  while (throttle > 1050) { // is the throttle up?
+    setRGB(0xf6f6, 0xffff, 0x0f00);  // red long on, long off, long on, very short off, short on, very short off. blue blinks during first gap. now green is always on. weird.
     Serial.println(throttle);
     Serial.println("Please lower throttle to zero.");
     throttle = ibus.readChannel(2);
     delay(500);   // Wait for throttle to go to zero
     ibus.loop();  // trying to update values
   }
+  setRGB(0,0,0);
   Serial.println("Throttle confirmed down.");
 }
 
@@ -437,6 +292,7 @@ void setup() {
   Serial.println("Accelerometer initialized and calibrated.");
 
   initIBus();
+  Serial.println("IBus initialized.");
 
   // Additional setup steps can go here
   Serial.println("Setup complete. Ready for operation.");
@@ -465,11 +321,11 @@ void updateInputs() {
 
   // Calculate stick angle in radians as a fraction of a circle
   // swapped sign of arguments so circle starts at top and goes clockwise on stick.
-  stickAngle = atan2(-stickVert, stickHoriz) / (2 * PI); 
+  stickAngle = atan2(-stickVert, stickHoriz) / (2 * PI);
 
   // Calculate stick length (magnitude) using Pythagoras' theorem
   stickLength = sqrt(sq(stickVert) + sq(stickHoriz));  // [ removed / 500 as it's already normalized from -1 to 1]
-  stickLength /= 1.4142135623;                         // divide by sqrt(2) to put it into 0..1 range
+  stickLength = min(stickLength, 1.0); // lets's just saturate it if it's in the corners.
 
   if (stickLength < 0.05) {
     stickAngle = 0;
@@ -482,15 +338,18 @@ void updateInputs() {
   // Read sideways input (channel 3) and map it to -1 to 1
   sidewaysInput = (ibus.readChannel(3) - 1500) / 500.0;
 
-  // Read radius input (channel 4) and map it to 0.1cm to 10cm
+  // Read radius input (channel 4) and map it to 0.1cm to 20cm
   radiusInput = ibus.readChannel(4);
-  radiusSize = map(radiusInput, 1000, 2000, 0.001, 0.10);  // Result in centimeters (1mm to 10 cm)
+  radiusSize = map(radiusInput, 1000, 2000, 0.001, 0.20);  // Result in centimeters (1mm to 20 cm)
 
   // Read LED offset input (channel 5).
   headingOffset = (ibus.readChannel(5) - 1500) / 1000.0;  // fraction of the way around a circle the joystick points: offset used for moving
+
+  int tmpSwitch = ibus.readChannel(6);
+  if(tmpSwitch < 1500) loggingSwitch = true; else loggingSwitch = false;
+
 }
 
-// this function was human written i think, at least all the print parts.
 void displayState() {
   static uint32_t lastIdleMessage = 0;
   uint32_t now = millis();
@@ -520,12 +379,14 @@ void displayState() {
   }
 }
 
-// Apply a low-pass filter to the accelerometer reading
-float lowPassFilter(float currentReading, float previousFilteredReading, float alpha) {
-    return alpha * currentReading + (1.0 - alpha) * previousFilteredReading;
-}
 float filterAlpha = 0.2;
 float previousFilteredReading = 0.0;
+
+// Apply a low-pass filter to the accelerometer reading
+float lowPassFilter(float currentReading) {
+  previousFilteredReading = filterAlpha * currentReading + (1.0 - filterAlpha) * previousFilteredReading;
+  return previousFilteredReading;
+}
 
 
 // Function to get the magnitude of the acceleration due to spinning (centripetal force)
@@ -541,8 +402,8 @@ float getSpinAcceleration() {
 
   // Calculate the magnitude of the acceleration vector (centripetal force)
   float spinAccel = sqrt(x * x + y * y + z * z);
-  spinAccel = lowPassFilter(spinAccel, previousFilteredReading, filterAlpha);
-  previousFilteredReading = spinAccel;
+  spinAccel = lowPassFilter(spinAccel);
+
   return spinAccel;  // This is the magnitude of the centripetal acceleration (in m/s²)
 }
 
@@ -563,146 +424,178 @@ float calculateRPS() {
   return rps;  // Return the calculated RPS
 }
 
-
-
-// Constants
-const float RPS_THRESHOLD = 7.0;              // 7 revolutions per second = 420 RPM
-const unsigned long LOOP_DELAY_MICROS = 200;  // Delay for each loop iteration in microseconds
-
-// Variables
 unsigned long usRevStartTime = 0;  // Time in microseconds when the revolution started
 
-// this is now human edited. it's become more human than machine. the AI version did what I asked for
-// but it turns out I should've researched more meltybrain code before writing this than just openmelt2. 
-//
-// TODO: research more meltybrain code than just openmelt2.
-//
-// After multiple people I talked about it with seemed more confused by the code than I expected, I 
-// apparently learned that this form of pulsing the motors isn't the usual way? well, it's not the 
-// only way of doing it. ramping the speed so you spend 1/2 the time speeding up and 1/2 the time
-// slowing down are the norm, or something? Still haven't checked linear ramps. 
-//
-//  implemented a sinusoidal ramping function locked to the current predicted phase. 
-// once the bot is spinning fast enough (##undefined variable used##) this should keep it spinning at the same speed 
+unsigned long prevRevTimeMicros = 1000000 / 400;  // Store the previous rotation period
+unsigned long prevTimeMicros = 0; // Store the last timestamp
 
+// the input is the cosine of ph1 or ph2
+// the output will be a shaped cosine,
+// spending more time in the top than the bottom.
+float reshapeCos(float a)
+{
+  float b = a - 1.0f;
+  float c = 1 - ( b * b) * 0.5;
+  return c;
+}
+
+// so many changes since last time.
+// it's become more machine than man. again.
 void handleMeltybrainDrive() {
-  // Calculate revolutions per second (RPS)
-  float rps = calculateRPS();
-
-  // If RPS is below the threshold, pretend it's at the threshold and blink on the green light so we know we can't translate.
-  if (rps < RPS_THRESHOLD) {
-    rps = RPS_THRESHOLD;
-    setRGB(0, 0xaaaa, 0x0000);
-  }
-
-  // Calculate the time for one complete revolution in microseconds
-  unsigned long revTimeMicros = (1000000 / rps);
 
   // Get the current time in microseconds
-  unsigned long usCurrentTime = micros();
-  usRevStartTime = usCurrentTime;
-
+  static unsigned long usRevStartTime = micros();
   // Enter loop for an entire revolution
   while (true) {
-    // Calculate the time passed in the current revolution
-    unsigned long currentTimeMicros = micros() - usRevStartTime;
 
+    if (!rc_signal_is_healthy()) { // we need to bail this loop if we lose signal.
+      return; // next loop() call will zero throttle etc
+    }
+    updateInputs();
+
+    // Calculate revolutions per second (RPS)
+    float rps = calculateRPS();
+
+    if(loggingSwitch) calibration.updateCalibration(throttle, rps * 60);
+
+    // If RPS is below the threshold, pretend it's at the threshold and blink on the red light so we know we can't translate. 
+    // we also set the stickLength (the desired translation amount) to zero.
+    if (rps < RPS_THRESHOLD) {
+      rps = RPS_THRESHOLD;
+      setRGB(0xaaaa, 0x0000, 0x0000);
+      stickLength = 0.0;
+    }
+    else
+    {
+      setRGB(0x0000, 0x0000, 0x0000);
+    }
+
+    // Calculate the time for one complete revolution in microseconds
+    unsigned long revTimeMicros = (1000000 / rps);
+
+    unsigned long now = micros();
+    // When revTimeMicros is updated to a new value:
+    if (revTimeMicros != prevRevTimeMicros) {
+        unsigned long elapsedTime = now - prevTimeMicros;
+        
+        // Calculate the phase angle in the previous rotation period (0 to 1)
+        float oldPhase = (float)(now - usRevStartTime) / prevRevTimeMicros;
+        
+        // Account for elapsed time since last step
+        oldPhase += (float)elapsedTime / prevRevTimeMicros;
+        
+        // Normalize phase to 0-1 range
+        oldPhase = fmod(oldPhase, 1.0);
+        
+        // Convert the phase to the new rotation period
+        usRevStartTime = now - (unsigned long)(oldPhase * revTimeMicros);
+        
+        // Update previous values
+        prevRevTimeMicros = revTimeMicros;
+        prevTimeMicros = now;
+    }
+
+    // Calculate the time passed in the current revolution
+    unsigned long currentTimeMicros = now - usRevStartTime;
     // If the current time exceeds the revolution time, exit the loop
     if (currentTimeMicros >= revTimeMicros) {
+      usRevStartTime += revTimeMicros;
       break;
     }
 
     // Calculate the adjusted heading
-    float adjustedHeading = headingOffset - stickAngle;
-
-    // human code: added check for negative offfset. if stickangle is to the left it will be negative.
-    // also changed if to while in next one; input may have been close to -2.0 or 2.0. loop allows other modifiers
-    // to offset
-
-    while (adjustedHeading < 1.0) {
+    float adjustedHeading = headingOffset + stickAngle;
+    adjustedHeading = fmod(adjustedHeading, 1.0);
+    if (adjustedHeading < 0.0) {
       adjustedHeading += 1.0;
-    }
-    while (adjustedHeading > 1.0) {
-      adjustedHeading -= 1.0;
     }
 
     // Calculate timeToForward and timeToBackward
     float timeToForward = adjustedHeading * revTimeMicros;
-    float timeToBackward = timeToForward + 0.5 * revTimeMicros;
+
+    // for phased based speed transition for translation
+    float m2PhaseOffset = 0.5;
+    float timeToBackward = timeToForward + m2PhaseOffset * revTimeMicros;
     if (timeToBackward > revTimeMicros) {
       timeToBackward -= revTimeMicros;
     }
 
     // Calculate width for motor activation checks
-    float widthScale = max(stickLength, throttle);  // human addition. was stickLength which doesn't make sense for not moving.
-    
+    float speedLen = stickLength;
+
     // Set the throttle for each motor using the global throttle value
     // modulated by a cosine function
-    float ph1 = ( (currentTimeMicros + timeToForward  ) / revTimeMicros) * M_PI * 2.0f;
-    float ph2 = ( (currentTimeMicros + timeToBackward ) / revTimeMicros) * M_PI * 2.0f;
-    float cos_ph1 = cos(ph1);
-    float cos_ph2 = cos(ph2);
-    float th1 = max(0, (cos_ph1 * 0.25f * stickLength) + throttle);
-    float th2 = max(0, (cos_ph2 * 0.25f * stickLength) + throttle);
+    float ph1 = ((currentTimeMicros - timeToForward) / revTimeMicros) * M_PI * 2.0f;
+    float ph2 = ((currentTimeMicros - timeToBackward) / revTimeMicros) * M_PI * 2.0f;
 
-    setThrottle(th1, -th2);  // switched signs for motor2. 
+    // reshape the cosine function so it spends more time with bigger numbers on the positive side
+    // to try balance actual behavior of motors.
+    float cos_ph1 = reshapeCos ( cos(ph1) );
+    float cos_ph2 = reshapeCos ( cos(ph2) );
 
-    // Update the LEDs to visualize the current heading. 
-    // ph1 is the center front of the orbit. 
-    // cos(ph1) (multiply by 360 or 2pi for angle from the center front quadrant)
-    // 0.000: 1.0000
-    // 0.125: 0.7071
-    // 0.250: 0.0000
-    // 0.375:-0.7071
-    // 0.500:-1.0000
-    // 0.625:-0.7071
-    // 0.750: 0.0000
-    // 0.875: 0.7071
-    // 1.000: 1.0000
-    // the values for the region 45 degrees each side of center front are all greater
-    // than 0.7071. This would illuminate 1/4 of the arc for that section of the 
-    // revolution. 
+    float mixFrac = 0.25f;
+    float baseLevel = throttle + speedLen * mixFrac;
+    if ( baseLevel > 1) baseLevel = 1;
+    if ( baseLevel > (1.0f-mixFrac) )
+    {
+      mixFrac = 1.0f - baseLevel;
+    }
+    if( baseLevel < mixFrac)
+    {
+      mixFrac = baseLevel;
+    }
+    float th1 = (cos_ph1 * mixFrac * speedLen) + baseLevel;
+    float th2 = (cos_ph2 * mixFrac * speedLen) + baseLevel;
 
-    // coincides with motor pulses.
-    bool blueLEDOn = cos_ph1 > 0.7071 * ( 1.4 - widthScale * 0.9 );
+    setThrottle(th1, -th2);  // switched signs for motor2.
+    
+    // Update the LEDs to visualize the current heading.
+    // ph1 is the center front of the orbit.
+    // cos(ph1 * 2pi)  for the region 45 degrees each side of center front are all greater
+    // than 0.7071. This illuminates 1/4 of the arc for that section of each revolution.
+    // also coincides with motor pulses.
 
-    digitalWrite(bluePin, blueLEDOn);
-    // digitalWrite(greenPin, greenLEDOn);
+    bool blueLEDOn  = (cos_ph1 > 0.7071067811) ; // 45 degrees each side
+    bool greenLEDOn = (cos_ph2 > 0.9238795325) ; // 22.5 degrees each side
 
-    // Add a 200-microsecond delay at the end of each loop iteration
-    delayMicroseconds(LOOP_DELAY_MICROS);
+    digitalWriteFast(bluePin , !blueLEDOn ); // phase 1 - blue
+    digitalWriteFast(greenPin, !greenLEDOn); // phase 2 - green
+
   }
 }
-
 
 void loop() {
   // Update the IBus object for Teensy
   ibus.loop();
-  while (!rc_signal_is_healthy()) {
+  if (!rc_signal_is_healthy()) {
     setRGB(0xdede, 0x0000, 0x8282);
     ibus.loop();
     setThrottle(0, 0);
-    delay(15);  // stop the speedy scroll
+    delay(50);  // stop the speedy scroll
     displayState();
+    return;
   }
   updateInputs();
 
   if (isInTankDriveMode()) {
-    setRGB(0x00ff, 0x00ff, 0x00ff);  // all LEDs blinking so you can tell
+    setRGB(0xff00, 0xfff0, 0x00ff);  // red and blue LEDs flash slowly with green steady: tank drive
     handleTankDrive();
-    delay(5);  // give us time to do _something_
+    delay(5);  // give us time to do _something_. Driving around doesn't
     displayState();
     return;
   }
 
   if (isThrottleNearlyZero()) {
-    setRGB(0x0001, 0x1246, 0x1236);
+    setRGB(0x0000, 0x2148, 0x1236); // no error, green and blue blinking means ready, but no throttle
     setThrottle(0, 0);
     // add code to do whatever stuff
     // we should do when not moving.
+
   } else {
     setRGB(0, 0, 0);  // all off. at least as far as updateLEDs() is concerned.
     handleMeltybrainDrive();
   }
   displayState();
+
+  checkSerial();
 }
