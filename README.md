@@ -12,9 +12,13 @@
   * it's probably a bad idea for everyone.
 
 ## Current status
-This code has now been tested, and it seems to work. It can get "lock" when spinning now, 
-and it demonstrated translation in a controlled direction after tuning earlier today in a 
-test box. (The noise was too much to test it for long late at night. More later.)
+This code _basically_ works. The driving experience is not what it should be. You currently need to rotate the aim around as you move to keep it going straight, 
+especially at "high speeds". Doing this I was able to translate from one end of my 4' long test box to the other and back again in somewhere between 20 and 30 
+seconds. This is probably fast enough as is for the NHRL 2025 Functionality test, provided you learn to control it. The main reason for this and the previous commit
+is to make sure there is a "good enough" version to go back to if the next radical code changes break everything.
+
+The heading lock is rock steady once you reach ~400 rpm. It just doesn't mean anything, and when you start moving, it deflects in a random direction. But 
+the heading stays fixed (assume it was fixed) and you just have to change your relative position with the right stick... see below for idealized driving instructions.
 
 ------
 
