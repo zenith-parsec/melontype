@@ -556,10 +556,10 @@ void handleMeltybrainDrive() {
     // also coincides with motor pulses.
 
     bool blueLEDOn  = (cos_ph1 > 0.7071067811) ; // 45 degrees each side
-    bool greenLEDOn = (cos_ph2 > 0.9238795325) ; // 22.5 degrees each side
+    // bool greenLEDOn = (cos_ph2 > 0.9238795325) ; // 22.5 degrees each side
 
     digitalWriteFast(bluePin , !blueLEDOn ); // phase 1 - blue
-    digitalWriteFast(greenPin, !greenLEDOn); // phase 2 - green
+    // digitalWriteFast(greenPin, !greenLEDOn); // phase 2 - green
 
   }
 }
