@@ -3,10 +3,50 @@
 #include "LED.h"
 
 const int numled = 16;
+const int ledcols = 36;
 #include <WS2812Serial.h>
 
 byte drawingMemory[numled*3];         //  3 bytes per LED
 DMAMEM byte displayMemory[numled*12]; // 12 bytes per LED
+
+byte screen[numled*3][ledcols];
+void setPixel(uint8_t x, uint8_t y, uint8_t r, uint8_t g, uint8_t b)
+{
+  screen[y*3 + 0][x] = r;
+  screen[y*3 + 1][x] = g;
+  screen[y*3 + 2][x] = b;
+}
+
+void addPixel(uint8_t x, uint8_t y, uint8_t r, uint8_t g, uint8_t b)
+{
+  uint8_t rr = screen[y*3 + 0][x];
+  uint8_t gg = screen[y*3 + 1][x];
+  uint8_t bb = screen[y*3 + 2][x];
+  int t;
+  if(t = ( rr+r>=256) ) t= 255;
+  screen[y*3 + 1][x] = t;
+  if(t = ( gg+r>=256) ) t= 255;
+  screen[y*3 + 1][x] = t;
+  if(t = ( bb+r>=256) ) t= 255;
+  screen[y*3 + 2][x] = t;
+}
+
+
+// e.g. fadeScreen(250, 255);
+void fadeScreen(uint8_t a, uint8_t b)
+{
+  uint16_t v;
+  for(int x = 0; x < ledcols; x++)
+  {
+    for(int y = 0; y < numled; y++)
+    {
+      v=screen[y*3 + 0][x] * a;
+      v/=b;
+      screen[y*3 + 0][x] = v&0xff;
+    }
+  }
+}
+
 
 WS2812Serial leds(numled, displayMemory, drawingMemory, LEDpin, WS2812_GRB);
 IntervalTimer ledTimer;

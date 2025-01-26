@@ -645,17 +645,9 @@ void handleMeltybrainDrive() {
     // than 0.7071. This illuminates 1/4 of the arc for that section of each revolution.
     // also coincides with motor pulses.
 
-<<<<<<< HEAD
-    bool blueLEDOn = (cos_ph1 > 0.7071067811);  // 45 degrees each side
-    bool greenLEDOn = cos(rawAngle) > 0.7071067811;
-=======
     bool blueLEDOn  = (cos_ph1 > 0.7071067811) ; // 45 degrees each side
-    // bool greenLEDOn = (cos_ph2 > 0.9238795325) ; // 22.5 degrees each side
-
-    digitalWriteFast(bluePin , !blueLEDOn ); // phase 1 - blue
-    // digitalWriteFast(greenPin, !greenLEDOn); // phase 2 - green
->>>>>>> 2d13526fd074d816545bb020675b20cf66276f54
-
+    bool greenLEDOn = cos(rawAngle) > 0.7071067811;
+    
     uint8_t r = 0;
     uint8_t b = !blueLEDOn;
     uint8_t g = !greenLEDOn;
