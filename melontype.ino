@@ -7,7 +7,6 @@
 #include "Adafruit_H3LIS331.h"
 #include "config.h"
 #include "LED.h"
-#include <driver/ledc.h>
 
 #include <ArduinoEigen.h>
 
@@ -15,59 +14,16 @@
 IBusBM ibus;  // IBus object for the radio receiver
 Adafruit_H3LIS331 lis = Adafruit_H3LIS331();
 
-struct timeevents_t {
-  void (*func)();
-  uint32_t gap;
-};
-
 void ibusLoop() {
   ibus.loop();
 }
 
 void pwmInterruptHandler();
-hw_timer_t *oneTimer;
-timeevents_t te[] = {
-//  { updateLEDs, 100 },         // every 50000us =   20Hz this is way too slow apparently.
-  { pwmInterruptHandler, 5 },  // every  2500us =  400Hz
-  { ibusLoop, 2 },             // every  1000us = 1000Hz
-  { (void (*)()) - 1, (uint32_t)-1 }
-};
 
-
-void IRAM_ATTR timerUpdate() {
-  static uint32_t t = 0;
-  t++;
-  for (int i = 0; te[i].gap != (uint32_t)-1; i++) {
-    uint32_t g = te[i].gap;
-    uint32_t x = t % g;
-    if (x == 0) te[i].func();
-  }
-}
-
-// add event to the te structure. the docs seem to say i can only use one timer on the XIAO? that doesn't seem right.
-void doInitTimers() {
-  Serial.println("calling timerBegin");
-  oneTimer = timerBegin(5000);
-  Serial.println("calling timerAttachInterrupt");
-  timerAttachInterrupt(oneTimer, timerUpdate);
-  timerAlarm(oneTimer, 1000000 / 5000, true, 0);
-}
-
-
-
-#if xTEENSY == 1
 //HardwareSerial &iBusSerialPort = Serial2;  // digital pin 7: update ibusPin in config.h too!!!!
 HardwareSerial &iBusSerialPort = Serial5;  // digital pin 21: update ibusPin in config.h ::::: new board only!!
 IntervalTimer pwmTimer;
-#endif
-#if xESP32 == 1
 
-HardwareSerial &iBusSerialPort = Serial0;  // digital pin 21: update ibusPin in config.h ::::: new board only!!
-void digitalWriteFast(uint8_t pin, uint8_t val) {
-  digitalWrite(pin, val);
-}  // ok. whatever. if i change, i'll remove this probably.
-
-#endif
 bool pwmIntCalled;
 bool doResetStats = false;
 
@@ -178,13 +134,8 @@ void handleTankDrive() {
   setThrottle(m1, m2, false);  // Set new desired throttle for motors
 }
 
-#if xTEENSY == 1
-#define motorWrite analogWrite
-#endif
-#if xESP32 == 1
-#define motorWrite ledcWrite
-#endif
 
+#define motorWrite analogWrite
 
 // Interrupt handler to send PWM signal (this triggers the actual motor control)
 void pwmInterruptHandler() {
@@ -208,62 +159,10 @@ void pwmInterruptHandler() {
 void initESCs() {
   // Set PWM resolution to 16 bits
   // Set the PWM frequency for each motor pin to ESC servo rate (ESC_SERVO_RATE)
-#if xTEENSY == 1
   analogWriteResolution(16);
   analogWriteFrequency(motorPin1, ESC_SERVO_RATE);
   analogWriteFrequency(motorPin2, ESC_SERVO_RATE);
 
-#endif
-#if xESP32 == 1
-  const int pwmFrequency = ESC_SERVO_RATE;  // 400 Hz for ESCs
-  const int pwmResolution = 10;             // 10-bit resolution (0-1023)
-  const int timerIndex = 0;                 // Use timer 0
-
-  // Configure timer for 400 Hz PWM
-  ledc_timer_config_t timerConfig = {
-    .speed_mode = LEDC_LOW_SPEED_MODE,  // Use low-speed mode for most GPIOs
-    .duty_resolution = (ledc_timer_bit_t)pwmResolution,
-    .timer_num = (ledc_timer_t)timerIndex,
-    .freq_hz = pwmFrequency,
-    .clk_cfg = LEDC_AUTO_CLK
-  };
-  esp_err_t err = ledc_timer_config(&timerConfig);
-  if (err != ESP_OK) {
-    Serial.print("initESCs: ledc_timer_config(): err = ");
-    Serial.println(err);
-  }
-
-  // Attach pin and channel for ESC 1
-  const ledc_channel_config_t esc1Config = {
-    .gpio_num = motorPin1,
-    .speed_mode = LEDC_LOW_SPEED_MODE,
-    .channel = LEDC_CHANNEL_0,
-    .timer_sel = (ledc_timer_t)timerIndex,
-    .duty = 0,  // Neutral position (50% duty cycle)
-    .hpoint = 0
-  };
-  err = ledc_channel_config(&esc1Config);
-  if (err != ESP_OK) {
-    Serial.print("initESCs: ledc_channel_config(&esc1Config): err = ");
-    Serial.println(err);
-  }
-
-  // Attach pin and channel for ESC 2
-  const ledc_channel_config_t esc2Config = {
-    .gpio_num = motorPin2,
-    .speed_mode = LEDC_LOW_SPEED_MODE,
-    .channel = LEDC_CHANNEL_1,
-    .timer_sel = (ledc_timer_t)timerIndex,
-    .duty = 0,  // Neutral position (50% duty cycle)
-    .hpoint = 0
-  };
-  ledc_channel_config(&esc2Config);
-  if (err != ESP_OK) {
-    Serial.print("initESCs: ledc_channel_config(&esc2Config): err = ");
-    Serial.println(err);
-  }
-  pwmInterruptHandler();
-#endif
   // Set initial throttle to 0 for both motors
   setThrottle(0, 0);
 
@@ -288,12 +187,10 @@ void checkSerial() {
 }
 
 void initAccel() {
-#if TEENSY == 1
   pinMode(accel3v3, OUTPUT);
   pinMode(accelGND, OUTPUT);
   digitalWrite(accel3v3, HIGH);
   digitalWrite(accelGND, LOW);
-#endif
   delay(10);
 
   if (!lis.begin_I2C(ACCEL_I2C_ADDR)) {
@@ -304,9 +201,7 @@ void initAccel() {
     while (1) {
       checkSerial();  // for command parsing and stuff.
                       // crashes here, but doesn't when ibus.loop() is removed. then it crashes in delay() below.
-#if xTEENSY == 1
       ibus.loop();
-#endif
       updateInputs();  // update the inputs
       displayState();
       updateLEDs(); // still crashes. ;/
@@ -397,9 +292,7 @@ bool rc_signal_is_healthy() {
   if (now - last_ibus_seen_millis < 500) {
     res = true;
   } else {
-#if xTEENSY == 1
     ibus.loop();
-#endif
   }
   if (last_cnt_rec != ibus.cnt_rec || last_cnt_poll != ibus.cnt_poll) {
     res = true;
@@ -471,15 +364,13 @@ void setup() {
 
   // Initialize ESCs by sending zero throttle to both motors
   initESCs();
+  Serial.println("ESCs initialized and motors stopped.");
 
   // Initialize IBus so we can monitor the TX without an accelerometer.
   // It's a long story. No, it's short: I made a mistake on a PCB. Now we have this code change.
   initIBus();
   Serial.println("IBus initialized.");
-
-  doInitTimers();  // starts pwm, ibus, and led timers
-  Serial.println("ESCs initialized and motors stopped.");
-
+  
   // Initialize accelerometer and collect calibration data
   initAccel();               // Function to initialize the accelerometer
   collectCalibrationData();  // Function to calibrate and store offset
@@ -765,8 +656,6 @@ void handleMeltybrainDrive() {
 }
 
 void loop() {
-  while (1)
-    ;  /// TODO FIXME ;] this is so it doesn't go driving around while testing. remove this before use. etc.
   // Update the IBus object for Teensy
   ibus.loop();
   if (!rc_signal_is_healthy()) {
