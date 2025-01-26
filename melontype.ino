@@ -478,13 +478,16 @@ float previousFilteredReading = 0.0;
 
 // Apply a low-pass filter to the accelerometer reading
 float lowPassFilter(float currentReading) {
-  previousFilteredReading = filterAlpha * currentReading + (1.0 - filterAlpha) * previousFilteredReading;
-  return previousFilteredReading;
+  // trying out not filtering it; reportedly improved performance (with a Kalman filter, but baby steps)
+
+  return currentReading;
+//  previousFilteredReading = filterAlpha * currentReading + (1.0 - filterAlpha) * previousFilteredReading;
+//  return previousFilteredReading;
 }
 
 
 float rawAngle = 0;
-
+float rawMagnitude = 0;
 // Function to get the magnitude of the acceleration due to spinning (force on the X-axis)
 // while rejecting gravity (the Z-axis) and acceleration (the Y-axis).
 float getSpinAcceleration() {
@@ -498,8 +501,10 @@ float getSpinAcceleration() {
   float z = s.acceleration.z - accelOffsetZ;
 
   rawAngle = atan2(y, x);
+  rawMagnitude = sqrt(x * x + y * y + z * z);
+  
   // Calculate the magnitude of the acceleration vector (centripetal force)
-  float spinAccel = lowPassFilter(sqrt(x * x + y * y + z * z));
+  float spinAccel = lowPassFilter(rawMagnitude);
 
   return spinAccel;  // This is the magnitude of the centripetal acceleration component(in m/s²)
 }
@@ -552,6 +557,7 @@ void handleMeltybrainDrive() {
     // Calculate revolutions per second (RPS)
     float rps = calculateRPS();
 
+  
     // If RPS is below the threshold, pretend it's at the threshold and blink on the red light so we know we can't translate.
     // we also set the stickLength (the desired translation amount) to zero.
     if (rps < RPS_THRESHOLD) {
@@ -561,23 +567,25 @@ void handleMeltybrainDrive() {
     } else {
       setRGB(0x0000, 0x0000, 0x0000);
     }
-    updateLEDs();
     // Calculate the time for one complete revolution in microseconds
     unsigned long revTimeMicros = (1000000 / rps);
 
     unsigned long now = micros();
     // When revTimeMicros is updated to a new value:
+
+    // Calculate the phase angle in the previous rotation period (0 to 1)
+    float phase = (float)(now - usRevStartTime) / prevRevTimeMicros;
+
     if (revTimeMicros != prevRevTimeMicros) {
       unsigned long elapsedTime = now - prevTimeMicros;
 
-      // Calculate the phase angle in the previous rotation period (0 to 1)
-      float oldPhase = (float)(now - usRevStartTime) / prevRevTimeMicros;
-
+      float oldPhase = phase;
       // Account for elapsed time since last step
       oldPhase += (float)elapsedTime / prevRevTimeMicros;
 
       // Normalize phase to 0-1 range
       oldPhase = fmod(oldPhase, 1.0);
+      phase = oldPhase;
 
       // Convert the phase to the new rotation period
       usRevStartTime = now - (unsigned long)(oldPhase * revTimeMicros);
@@ -585,7 +593,25 @@ void handleMeltybrainDrive() {
       // Update previous values
       prevRevTimeMicros = revTimeMicros;
       prevTimeMicros = now;
+
     }
+
+    
+    int now_pos = (int)(ledcols * fmod(phase, 1.0));
+
+    int i_mag = (int)(log(rawMagnitude) * 1.7071);
+    if(i_mag > ledcols - 1) i_mag = ledcols -1;
+    i_mag += 1;
+    addPixel(now_pos, i_mag, 64, 64, 64);
+    for(int i = 1; i < numled; i++)
+    {
+      uint8_t r = screen[i * 3 + 0][now_pos];
+      uint8_t g = screen[i * 3 + 1][now_pos];
+      uint8_t b = screen[i * 3 + 2][now_pos];
+      setRGB(r, g, b, i);
+    }
+    updateLEDs();
+
 
     // Calculate the time passed in the current revolution
     unsigned long currentTimeMicros = now - usRevStartTime;
@@ -647,12 +673,13 @@ void handleMeltybrainDrive() {
 
     bool blueLEDOn  = (cos_ph1 > 0.7071067811) ; // 45 degrees each side
     bool greenLEDOn = cos(rawAngle) > 0.7071067811;
-    
+
     uint8_t r = 0;
     uint8_t b = !blueLEDOn;
     uint8_t g = !greenLEDOn;
     setRGB(r, g, b);
   }
+  fadeScreen(1,4);
 }
 
 void loop() {

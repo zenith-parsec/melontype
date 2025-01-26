@@ -6,7 +6,7 @@ const int motorPin1 = 22;    // 23 // skip HardwareSerial1
 const int motorPin2 = 23;    // 22 
 const int ibusPin   = 21;    // 21 FAKE! Hardware5 is digital 21  if changed, update in melontype.ino too!
 const int otherTX   = 20;    // 20 FAKE! Hardware5 is digital 20  if changed, update in melontype.ino too!
-  
+
 
 const int LEDpin      = 14;
 

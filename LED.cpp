@@ -2,8 +2,6 @@
 #include "config.h"
 #include "LED.h"
 
-const int numled = 16;
-const int ledcols = 36;
 #include <WS2812Serial.h>
 
 byte drawingMemory[numled*3];         //  3 bytes per LED
@@ -12,6 +10,8 @@ DMAMEM byte displayMemory[numled*12]; // 12 bytes per LED
 byte screen[numled*3][ledcols];
 void setPixel(uint8_t x, uint8_t y, uint8_t r, uint8_t g, uint8_t b)
 {
+  if(x >= ledcols) return;
+  if(y >= numled) return;
   screen[y*3 + 0][x] = r;
   screen[y*3 + 1][x] = g;
   screen[y*3 + 2][x] = b;
@@ -23,26 +23,37 @@ void addPixel(uint8_t x, uint8_t y, uint8_t r, uint8_t g, uint8_t b)
   uint8_t gg = screen[y*3 + 1][x];
   uint8_t bb = screen[y*3 + 2][x];
   int t;
-  if(t = ( rr+r>=256) ) t= 255;
+  if(x >= ledcols) return;
+  if(y >= numled) return;
+  
+  t = rr + r;
+  if( t >= 256 ) t= 255;
   screen[y*3 + 1][x] = t;
-  if(t = ( gg+r>=256) ) t= 255;
+
+  t = gg + g;
+  if( t >= 256 ) t = 255;
   screen[y*3 + 1][x] = t;
-  if(t = ( bb+r>=256) ) t= 255;
+
+  t = bb + b;
+  if( t >= 256 ) t = 255;
   screen[y*3 + 2][x] = t;
 }
 
-
 // e.g. fadeScreen(250, 255);
-void fadeScreen(uint8_t a, uint8_t b)
+void fadeScreen(uint8_t m, uint8_t d)
 {
-  uint16_t v;
+  int16_t v;
   for(int x = 0; x < ledcols; x++)
   {
     for(int y = 0; y < numled; y++)
     {
-      v=screen[y*3 + 0][x] * a;
-      v/=b;
-      screen[y*3 + 0][x] = v&0xff;
+      for(int c = 0; c < 3; c++)
+      {
+        v=( screen[y*3 + c][x] * m ) / d;
+        if(v <   0) v = 0;
+        if(v > 255) v = 255;
+        screen[y*3 + c][x] = v;
+      }
     }
   }
 }
@@ -74,7 +85,11 @@ static bool rgbWasZero = false;
 // Function to set the RGB LED states
 void setRGB(uint16_t r, uint16_t g, uint16_t b, uint8_t idx) {
   // Update the red, green, and blue states with the provided values
+  if(idx < 0) return;
+  if(idx >= numled) return;
+  idx = numled -1 - idx; // fix for me doing it backwards
   uint32_t color = ((r&0xff)<<16) | ((g&0xff)<< 8) | (b&0xff);
+  
   leds.setPixel(idx, color);
 
   if(idx == 0)
