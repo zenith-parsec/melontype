@@ -305,7 +305,7 @@ bool rc_signal_is_healthy() {
 
 void initIBus() {
   // Initialize the radio receiver using the IBusBM library
-  ibus.begin(iBusSerialPort, 0, ibusPin, otherTX);  // Start IBus communication
+  ibus.begin(iBusSerialPort);
   Serial.println("IBus receiver initialized.");
   ibus.loop();  // get the first value?
   // Validate that commands are being received
@@ -645,8 +645,16 @@ void handleMeltybrainDrive() {
     // than 0.7071. This illuminates 1/4 of the arc for that section of each revolution.
     // also coincides with motor pulses.
 
+<<<<<<< HEAD
     bool blueLEDOn = (cos_ph1 > 0.7071067811);  // 45 degrees each side
     bool greenLEDOn = cos(rawAngle) > 0.7071067811;
+=======
+    bool blueLEDOn  = (cos_ph1 > 0.7071067811) ; // 45 degrees each side
+    // bool greenLEDOn = (cos_ph2 > 0.9238795325) ; // 22.5 degrees each side
+
+    digitalWriteFast(bluePin , !blueLEDOn ); // phase 1 - blue
+    // digitalWriteFast(greenPin, !greenLEDOn); // phase 2 - green
+>>>>>>> 2d13526fd074d816545bb020675b20cf66276f54
 
     uint8_t r = 0;
     uint8_t b = !blueLEDOn;
