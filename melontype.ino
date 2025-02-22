@@ -14,23 +14,19 @@
 IBusBM ibus;  // IBus object for the radio receiver
 Adafruit_H3LIS331 lis = Adafruit_H3LIS331();
 
-void ibusLoop() {
-  ibus.loop();
-}
-
 void pwmInterruptHandler();
 
 //HardwareSerial &iBusSerialPort = Serial2;  // digital pin 7: update ibusPin in config.h too!!!!
-HardwareSerial &iBusSerialPort = Serial5;  // digital pin 21: update ibusPin in config.h ::::: new board only!!
+HardwareSerialIMXRT &iBusSerialPort = Serial5;  // digital pin 21: update ibusPin in config.h ::::: new board only!!
 IntervalTimer pwmTimer;
 
 bool pwmIntCalled;
 bool doResetStats = false;
 
 // acceleration offsets due to gravity
-float accelOffsetX;
-float accelOffsetY;
-float accelOffsetZ;
+float accelOffsetX = 0.0;
+float accelOffsetY = 0.0;
+float accelOffsetZ = 0.0;
 
 volatile uint32_t last_ibus_seen_millis;
 volatile uint8_t last_cnt_rec;
@@ -48,7 +44,7 @@ volatile float stickVert = 0.0;      // up/down = ch0
 volatile float stickHoriz = 0.0;     // left/right = ch1
 volatile float stickAngle = 0.0;     // Stick angle as a fraction of a circle
 volatile float stickLength = 0.0;    // Length of the stick vector
-volatile float throttle = 0.0;       // Throttle input = ch2
+volatile float powerInput = 0.0;       // Throttle input = ch2
 volatile float sidewaysInput = 0.0;  // Sideways input = ch3
 volatile float radiusInput = 0.0;    // Radius input = ch4
 volatile float radiusSize = 0.01;    // Mapped radius size (0.1 cm to 20 cm) in meters
@@ -63,22 +59,22 @@ float stretchThrottle(float throttle) {
   return s * (throttle * throttle);
 }
 
-int throttleToPWM(float throttle, bool stretch) {
+int throttleToPWM(float input, bool stretch) {
   // Constrain the throttle value between 0 and 1
-  throttle = constrain(throttle, -1.0, 1.0);
+  input = constrain(input, -1.0, 1.0);
   // do non-linear stretch or not?
   if (stretch) {
-    // throttle = stretchThrottle(throttle);
+    input = stretchThrottle(input);
   }
   // Map the throttle value (-1 to 1) to the PWM duty cycle values (1000us and 2000us converted to the 400Hz PWM)
-  return map(throttle, -1, 1, PWM_1000us, PWM_2000us);
+  return map(input, -1, 1, PWM_1000us, PWM_2000us);
 }
 
 // Modified setThrottle to only store the desired throttle, no analogWrite() here
-void setThrottle(float throttle1, float throttle2, bool stretch = true) {
+void setThrottle(float throttle1, float throttle2, bool stretch = false) {
   if (throttle1 == 0 && throttle2 == 0) {
-    lastMotor1 = -1;
-    lastMotor2 = -1;  // force an update. hack. so? shut up.
+    lastMotor1 = -2;  // -2 is impossible to actually set
+    lastMotor2 = -2;  // force an update. hack. so? shut up.
   }
 
   if (reverseM1) throttle1 = -throttle1;
@@ -119,8 +115,8 @@ float modulateThrottle(float inputThrottle, int idx) {
 // convert from 2-axis stick input into two channel "tank drive" motor output.
 // (converts stick to "tank mode" output)
 void handleTankDrive() {
-  float x = stickHoriz / 5.0;  // Horizontal stick input 0 - 0.2
-  float y = stickVert / 5.0;   // Vertical stick input   0 - 0.2
+  float x = stickHoriz / 2.0;  // Horizontal stick input -0.5 - 0.5
+  float y = stickVert / 2.0;   // Vertical stick input   -0.5 - 0.5
 
   // Calculate motor control values based on stick input
   float m1 = x + y;  // Motor 1 throttle
@@ -131,7 +127,7 @@ void handleTankDrive() {
   m2 = modulateThrottle(m2, 1);
 
   pwmIntCalled = false;
-  setThrottle(m1, m2, false);  // Set new desired throttle for motors
+  setThrottle(m1, m2, true);  // Set new desired throttle for motors
 }
 
 
@@ -163,6 +159,7 @@ void initESCs() {
   analogWriteFrequency(motorPin1, ESC_SERVO_RATE);
   analogWriteFrequency(motorPin2, ESC_SERVO_RATE);
 
+  pwmTimer.begin(pwmInterruptHandler, 1000000 / ESC_SERVO_RATE);
   // Set initial throttle to 0 for both motors
   setThrottle(0, 0);
 
@@ -180,6 +177,7 @@ void checkSerial() {
       // clear stuff
     }
     if (cmd == 'q') {
+      Serial.print("Entering infinite loop so you can update or whatever. maybe enjoy the lights?\n");
       // infinite loop... might help uploading if it was in a crash loop? 
       while(1) {  delay(1); }
     }
@@ -187,38 +185,38 @@ void checkSerial() {
 }
 
 void initAccel() {
-  pinMode(accel3v3, OUTPUT);
-  pinMode(accelGND, OUTPUT);
-  digitalWrite(accel3v3, HIGH);
-  digitalWrite(accelGND, LOW);
-  delay(10);
+  setCode(0011); 
+  // remove attempt to power I2C device from GPIO: powered from 3v3 directly now
+  // - higher current available and it's what it's for
 
   if (!lis.begin_I2C(ACCEL_I2C_ADDR)) {
     Serial.println("Failed to initialize accelerometer!");
     Serial.println("Use serial commands now if you want. I don't care.");
-    setRGB(0x7777, 0x8888, 0x0000);  // rrrgrrrgrrrgrrrg
     Serial.flush();
     while (1) {
       checkSerial();  // for command parsing and stuff.
-                      // crashes here, but doesn't when ibus.loop() is removed. then it crashes in delay() below.
-      ibus.loop();
       updateInputs();  // update the inputs
-      displayState();
-      updateLEDs(); // still crashes. ;/
-      delay(250);  // stop the speedy scroll
-      // crash in delay is crash in interrupt handler ;/
+      fadeScreen(1,4);
+      displayState();      
+      //updateLEDs(); 
+      setCode(0203); // 2 red, 0 green, 3 blue
+      delay(50);  // 
+      setCode( 0230); // 2 red, 3 green, 0 blue
+      delay(50);  
     }
     // We stop the system if the accelerometer initialization fails.
     // it's kind of important.
   }
 
   // Configure the accelerometer settings
-  lis.setDataRate(LIS331_DATARATE_400_HZ);
+  lis.setDataRate(LIS331_DATARATE_100_HZ); // perhaps it will be more accurate at a lower rate. only need it about this often
   lis.setRange(H3LIS331_RANGE_200_G);
-  lis.setLPFCutoff(LIS331_LPF_292_HZ);
-
+  // lis.setLPFCutoff(lis331_lpf_cutoff_t cutoff) won't help: it doesn't work in NORMAL mode.
+      
   Serial.println("Accelerometer initialized successfully.");
+  setCode(0020);
 }
+
 Eigen::Matrix3f rotationMatrix;
 
 void generateRotationMatrix() {
@@ -242,18 +240,21 @@ void generateRotationMatrix() {
 }
 
 void collectCalibrationData() {
-  Serial.println("about to start calibration... oh noes!");
+  Serial.println("Starting accelerometer calibration. Keep still.");
   // Set LEDs to blink a low-level warning for 2 seconds
-  setRGB(0x739c, 0x1ce7, 0x0000);  // 0b0111001110011100, 0b0001110011100111, 0b0000000000000000
-  delay(2000);                     // red and green 3 on, 2 off out of phase. slow blink.
-  setRGB(0x6666, 0x9999, 0x0000);  // 0b0110011001100110, 0b1001100110011001, 0b0000000000000000
-  delay(2000);                     // red and green 2 on 2 off. medium blink.
-  Serial.println("Starting calibration. Keep still.");
+  for(int i = 0; i < 6; i++)
+  {
+    setCode(0012); // 0r 1g 2b
+    delay(200);
+    setCode(0021); // 0r 2g 1b
+    delay(200);
+  }
   // Set LEDs to blink twice as fast while calibrating
-  setRGB(0x5555, 0xAAAA, 0x0000);  // 0b0101010101010101, 0b1010101010101010, 0b0000000000000000
-  // red and green 1 on 1 off fast blink.
-  // Collect sensor event samples
-  int sampleCount = 150;  // Between 100 and 200 samples
+  setCode(0102);  // red, black, black, blue, black, etc
+  // Collect sensor event samples 
+  // more samples = more better? Also, soon we rewrite this.
+
+  int sampleCount = 500;  // more samples more 
   float xSum = 0, ySum = 0, zSum = 0;
 
   for (int i = 0; i < sampleCount; i++) {
@@ -267,12 +268,14 @@ void collectCalibrationData() {
 
     delayMicroseconds(2500);  // Wait for 2500µs between samples
   }
+  setCode(0010); 
+
   Serial.println("Accelerometer samples collected");
 
   // Calculate the average values (gravity vector calibration)
-  float xOffset = xSum / sampleCount;
-  float yOffset = ySum / sampleCount;
-  float zOffset = zSum / sampleCount;
+  float xOffset = xSum / (float)sampleCount;
+  float yOffset = ySum / (float)sampleCount;
+  float zOffset = zSum / (float)sampleCount;
 
   // Store these offsets for future sensor calibration
   // Assume you have a global variable to store these offsets
@@ -280,9 +283,8 @@ void collectCalibrationData() {
   accelOffsetY = yOffset;
   accelOffsetZ = zOffset;
 
-  generateRotationMatrix();
+  generateRotationMatrix(); 
 
-  setRGB(0x0000, 0x0007, 0x0000);  // 0, 0b0000000000000111, 0  little green blip, no red or blue.
   Serial.println("Calibration completed. Offsets stored.");
 }
 
@@ -304,70 +306,80 @@ bool rc_signal_is_healthy() {
 }
 
 void initIBus() {
+  // We need to use pin 20 so tell the hardward to use a different pin we don't care about to transmit.
+  // if we don't, the FastLED code won't work.
+  // once it works, variables again
+  Serial5.setTX(39); // this is an alternate transmit pin for hardware serial port 5. 
+  Serial5.setRX(21); // default  
   // Initialize the radio receiver using the IBusBM library
   ibus.begin(iBusSerialPort);
+  setCode(0021); 
   Serial.println("IBus receiver initialized.");
   ibus.loop();  // get the first value?
   // Validate that commands are being received
   while (!ibus.readChannel(0)) {
-    setRGB(0xf0f6, 0x0001, 0x0f00);  // red long on, long off, long on, very short off, short on, very short off. blue blinks during first gap.
+    checkSerial();
+    setCode( 0222); 
+    ibus.loop();  // trying to update values
     Serial.println("Waiting for remote signal...");
 
-    ibus.loop();  // trying to update values
-    delay(100);   // stop spamming serial
+    delay(100);
+    setCode(405); 
+    delay(100); // we're async for LEDs so this is fine
   }
   Serial.println("Remote signal received.");
 
   // Ensure that throttle is in the down position (assuming throttle is on channel 2)
   int throttle = ibus.readChannel(2);
-  while (throttle > 1050) {          // is the throttle up?
-    setRGB(0xf6f6, 0xffff, 0x0f00);  // red long on, long off, long on, very short off, short on, very short off. blue blinks during first gap. now green is always on. weird.
+  uint32_t endThrottleCheck = millis() + 100;
+  while (throttle > 1050 || millis() < endThrottleCheck) {          // is the throttle up?
+    checkSerial();
+    setCode(0322);
     Serial.println(throttle);
-    Serial.println("Please lower throttle to zero.");
+    if(millis() > endThrottleCheck) Serial.println("Please lower throttle to zero.");
     throttle = ibus.readChannel(2);
-    delay(500);   // Wait for throttle to go to zero
+    delay(250); 
+    setCode(0304);
+    delay(250);   // plenty of time to lower it.
     ibus.loop();  // trying to update values
   }
-  setRGB(0, 0, 0);
+  setCode(0);
   Serial.println("Throttle confirmed down.");
 }
 
 void setup() {
   // Initialize serial communication for debugging
   Serial.begin(115200);
-  Serial.println("Initializing Meltybrain Robot...");
-  Serial.println("5...");
-  delay(1000);
-  Serial.println("4.");
-  delay(1000);
-  Serial.println("3?");
-  delay(1000);
-  Serial.println("2!");
-  delay(1000);
-  Serial.println("1,");
-  delay(1000);
-  Serial.println("0");
-  // Initialize LED subsystem
+  if (CrashReport) {
+    Serial.print(CrashReport);
+    delay(5000);
+    checkSerial();
+  }
+  
+  // Initialize LED subsystem: immediate start feedback
   initLEDs();
   Serial.println("LED subsystem initialized.");
 
   // debugging test pattern black white cyan magenta yellow blue green red
-  setRGB( 0,  0,  0, 0);
-  setRGB(28, 28, 18, 1);
-  setRGB( 0, 28, 18, 2);
-  setRGB(28,  0, 18, 3);
-  setRGB(28, 28,  0, 4);
-  setRGB( 0,  0, 18, 5);
-  setRGB( 0, 28,  0, 6);
-  setRGB(28,  0,  0, 7);
-  updateLEDs();
+  setRGB(32, 32, 32, 0);
+  setRGB(28, 28, 18, 4);
+  setRGB( 0, 28, 18, 5);
+  setRGB(28,  0, 18, 6);
+  setRGB(28, 28,  0, 7);
+  setRGB( 0,  0, 18, 8);
+  setRGB( 0, 28,  0, 9);
+  setRGB(28,  0,  0, 10);
 
   // Initialize ESCs by sending zero throttle to both motors
   initESCs();
   Serial.println("ESCs initialized and motors stopped.");
 
+  Serial.println("Initializing Meltybrain Robot... send 'q' within 2 seconds to enter infinite loop");
+  delay(2000);
+
+  checkSerial();
+
   // Initialize IBus so we can monitor the TX without an accelerometer.
-  // It's a long story. No, it's short: I made a mistake on a PCB. Now we have this code change.
   initIBus();
   Serial.println("IBus initialized.");
   
@@ -382,7 +394,7 @@ void setup() {
 
 // Function to check if throttle is nearly zero
 bool isThrottleNearlyZero() {
-  return throttle < ZERO_THRESHOLD;
+  return powerInput < ZERO_THRESHOLD;
 }
 
 // Function to check if in tank drive mode
@@ -394,16 +406,17 @@ bool isInTankDriveMode() {
 
 void updateInputs() {
   // Read the vertical and horizontal direction control (channel 0 and 1)
-  int vert = ibus.readChannel(0);   // Channel 0 (vertical)
-  int horiz = ibus.readChannel(1);  // Channel 1 (horizontal)
+  float vert = ibus.readChannel(0);   // Channel 0 (vertical)
+  float horiz = ibus.readChannel(1);  // Channel 1 (horizontal)
 
   // Convert to centered values (from 1000-2000 to -1.0 to 1.0)
-  stickVert = (vert - 1500) / 500.0;
-  stickHoriz = (horiz - 1500) / 500.0;
+  stickVert  = map(vert , 1000.0, 2000.0, -1.0, 1.0);
+  stickHoriz = map(horiz, 1000.0, 2000.0, -1.0, 1.0);
 
   // Calculate stick angle in radians as a fraction of a circle
-  // swapped sign of arguments so circle starts at top and goes clockwise on stick.
-  stickAngle = atan2(-stickVert, stickHoriz) / (2 * PI);
+  // ACTUALLY swapped sign of output and argume so circle starts at top and goes clockwise on stick.
+  // this might make the controls work better? 
+  stickAngle = -atan2(-stickVert, stickHoriz) / (2 * PI); 
 
   // Calculate stick length (magnitude) using Pythagoras' theorem
   float sl = sqrt(sq(stickVert) + sq(stickHoriz));
@@ -415,17 +428,20 @@ void updateInputs() {
   }
 
   // Read throttle (channel 2) and map it to 0 to 1
-  throttle = (ibus.readChannel(2) - 1000) / 1000.0;
+  float ch2 = ibus.readChannel(2);
+  powerInput = map(ch2, 1000.0, 2000.0, 0.0, 1.0);
 
   // Read sideways input (channel 3) and map it to -1 to 1
-  sidewaysInput = (ibus.readChannel(3) - 1500) / 500.0;
+  float ch3 = ibus.readChannel(3);
+  sidewaysInput = map(ch3, 1000, 2000, -1.0, 1.0);
 
-  // Read radius input (channel 4) and map it to 0.1cm to 20cm
+  // Read radius input (channel 4) and map it to 1mm to 100mm
   radiusInput = ibus.readChannel(4);
-  radiusSize = map(radiusInput, 1000, 2000, 0.001, 0.200);  // Result in centimeters (1mm to 200 mm)
+  radiusSize = map(radiusInput, 1000, 2000, 0.001, 0.100);  // Result in meters (1mm to 100 mm)
 
   // Read LED offset input (channel 5).
-  headingOffset = (ibus.readChannel(5) - 1500) / 1000.0;  // fraction of the way around a circle the joystick points: offset used for moving
+  float ch5 = ibus.readChannel(5);
+  headingOffset = map(ch5, 1000.0, 2000.0, -0.5, 0.5);
 
   // left and right switches control if we should reverse M1 and M2.
   // DO NOT SWITCH THESE WHILE MOVING. Probably. It might be cool, but it might blow up your robot.
@@ -443,34 +459,43 @@ void displayState() {
   if (now - lastIdleMessage > 250) {
     lastIdleMessage = now;
 
-    Serial.print("pwmIntCalled : ");
+    Serial.print("m1Throttle: ");
+    Serial.print(motor1Throttle);
+    Serial.print("  m2Throttle: ");
+    Serial.print(motor2Throttle);
+    Serial.print("  pwmIntCalled: ");
     Serial.print(pwmIntCalled);
-    Serial.print("\tstickVert    : ");
+    Serial.print("  stickVert: ");
     Serial.print(stickVert);
-    Serial.print("\tstickHoriz   : ");
+    Serial.print("  stickHoriz: ");
     Serial.print(stickHoriz);
-    Serial.print("\tstickAngle   : ");
+    Serial.print("  stickAngle: ");
     Serial.print(stickAngle);
-    Serial.print("\tstickLength  : ");
+    Serial.print("  stickLength: ");
     Serial.print(stickLength);
-    Serial.print("\tthrottle     : ");
-    Serial.print(throttle);
-    Serial.print("\tsidewaysInput: ");
+    Serial.print("  power: ");
+    Serial.print(powerInput);
+    Serial.print("  sidewaysInput: ");
     Serial.print(sidewaysInput);
-    Serial.print("\tradiusInput  : ");
+    Serial.print("  radiusInput: ");
     Serial.print(radiusInput);
-    Serial.print("\tradiusSize   : ");
-    Serial.print(radiusSize * 100.0f);
-    Serial.print("cm\theadingOffset: ");
+    Serial.print("  radiusSize: ");
+    Serial.print(radiusSize * 1000.0f);
+    Serial.print("mm  headingOffset: ");
     Serial.print(headingOffset);
-    Serial.print("\treverseM1: ");
+    Serial.print("  reverseM1: ");
     Serial.print(reverseM1);
-    Serial.print("\treverseM2: ");
+    Serial.print("  reverseM2: ");
     Serial.print(reverseM2);
-    Serial.print("\tsw3pos: ");
+    Serial.print("  sw3pos: ");
     Serial.print(sw3pos);
     Serial.println();
   }
+}
+
+int getSituation(float x, float y, float z)
+{
+  return 0;
 }
 
 float filterAlpha = 0.1;
@@ -478,16 +503,14 @@ float previousFilteredReading = 0.0;
 
 // Apply a low-pass filter to the accelerometer reading
 float lowPassFilter(float currentReading) {
-  // trying out not filtering it; reportedly improved performance (with a Kalman filter, but baby steps)
-
-  return currentReading;
-//  previousFilteredReading = filterAlpha * currentReading + (1.0 - filterAlpha) * previousFilteredReading;
-//  return previousFilteredReading;
+  previousFilteredReading = filterAlpha * currentReading + (1.0 - filterAlpha) * previousFilteredReading;
+  return previousFilteredReading;
 }
-
 
 float rawAngle = 0;
 float rawMagnitude = 0;
+float phase = 0; // bad global variable name, but it's the current phase
+
 // Function to get the magnitude of the acceleration due to spinning (force on the X-axis)
 // while rejecting gravity (the Z-axis) and acceleration (the Y-axis).
 float getSpinAcceleration() {
@@ -495,18 +518,25 @@ float getSpinAcceleration() {
   sensors_event_t s;
   lis.getEvent(&s);
 
+
   // Subtract calibration offsets
   float x = s.acceleration.x - accelOffsetX;
   float y = s.acceleration.y - accelOffsetY;
   float z = s.acceleration.z - accelOffsetZ;
+  
+  static uint32_t nextDisp = 0;
+  uint32_t now = millis();
+  if(now >= nextDisp)
+  {
+    nextDisp = now + 250;
+    Serial.printf("accel = %f, %f, %f\n", x, y, z);
+  }
 
   rawAngle = atan2(y, x);
-  rawMagnitude = sqrt(x * x + y * y + z * z);
+  rawMagnitude = sqrt(x * x + y * y); // + z * z); currently ignoring Z. see below
   
-  // Calculate the magnitude of the acceleration vector (centripetal force)
-  float spinAccel = lowPassFilter(rawMagnitude);
-
-  return spinAccel;  // This is the magnitude of the centripetal acceleration component(in m/s²)
+  return lowPassFilter(rawMagnitude);
+  
 }
 
 // Function to calculate revolutions per second based on spin acceleration
@@ -515,9 +545,9 @@ float calculateRPS() {
   float spinAccel = getSpinAcceleration();
 
   // Use the dynamically updated radiusSize as the spin radius (in meters)
-  float spinRadius = radiusSize;  // radiusSize is in meters. expected range is from 0.1cm to 10cm
+  float spinRadius = radiusSize;  // radiusSize is in meters. expected range is from 0.001m to 0.1m
 
-  if (spinRadius < 0.010) spinRadius = 0.010;
+  if (spinRadius < 0.001) spinRadius = 0.001;
   // Calculate angular velocity (omega) in radians per second
   float omega = sqrt(spinAccel / spinRadius);
 
@@ -541,8 +571,20 @@ float reshapeCos(float a) {
   return c;
 }
 
-// so many changes since last time.
-// it's become more machine than man. again.
+void copyScreen()
+{
+  int now_pos = (int)(ledcols * fmod(phase + rawAngle, 1.0)); // angle relative to phase, i think?
+  for(int i = 4; i < numled; i++)
+  {
+    uint8_t r = screen[i * 3 + 0][now_pos];
+    uint8_t g = screen[i * 3 + 1][now_pos];
+    uint8_t b = screen[i * 3 + 2][now_pos];
+    setRGB(r, g, b, i);
+  }
+}  
+
+// it also does so much else. working on refactoring it. 
+// TODO: refactor handleMeltybraindrive()
 void handleMeltybrainDrive() {
 
   // Get the current time in microseconds
@@ -550,9 +592,11 @@ void handleMeltybrainDrive() {
   // Enter loop for an entire revolution
   while (true) {
     if (!rc_signal_is_healthy()) {  // we need to bail this loop if we lose signal.
-      return;                       // next loop() call will zero throttle etc
+//      return;                       // next loop() call will zero throttle etc // lies. just force power to zero.
+      stickLength = 0.0;
+      powerInput = 0.0;
     }
-    updateInputs();
+    else updateInputs();
 
     // Calculate revolutions per second (RPS)
     float rps = calculateRPS();
@@ -562,10 +606,10 @@ void handleMeltybrainDrive() {
     // we also set the stickLength (the desired translation amount) to zero.
     if (rps < RPS_THRESHOLD) {
       rps = RPS_THRESHOLD;
-      setRGB(0xaaaa, 0x0000, 0x0000);
+      setRGB(0x80, 0x50, 0x50, 9); // if the y
       stickLength = 0.0;
     } else {
-      setRGB(0x0000, 0x0000, 0x0000);
+//      setRGB(0x0000, 0x0000, 0x0000);
     }
     // Calculate the time for one complete revolution in microseconds
     unsigned long revTimeMicros = (1000000 / rps);
@@ -574,7 +618,7 @@ void handleMeltybrainDrive() {
     // When revTimeMicros is updated to a new value:
 
     // Calculate the phase angle in the previous rotation period (0 to 1)
-    float phase = (float)(now - usRevStartTime) / prevRevTimeMicros;
+    phase = (float)(now - usRevStartTime) / prevRevTimeMicros;
 
     if (revTimeMicros != prevRevTimeMicros) {
       unsigned long elapsedTime = now - prevTimeMicros;
@@ -596,22 +640,16 @@ void handleMeltybrainDrive() {
 
     }
 
-    
-    int now_pos = (int)(ledcols * fmod(phase, 1.0));
 
-    int i_mag = (int)(log(rawMagnitude) * 1.7071);
-    if(i_mag > ledcols - 1) i_mag = ledcols -1;
-    i_mag += 1;
-    addPixel(now_pos, i_mag, 64, 64, 64);
-    for(int i = 1; i < numled; i++)
-    {
-      uint8_t r = screen[i * 3 + 0][now_pos];
-      uint8_t g = screen[i * 3 + 1][now_pos];
-      uint8_t b = screen[i * 3 + 2][now_pos];
-      setRGB(r, g, b, i);
-    }
-    updateLEDs();
+    // int now_pos = (int)(ledcols * fmod(phase + rawAngle, 1.0));
 
+    // uint8_t mag = rawMagnitude;
+    // int i_mag = (int)(log(rawMagnitude) * 2.0);
+    // if(i_mag > ledcols - 1) i_mag = ledcols -1;
+    // i_mag += 4;
+    // addPixel(now_pos, i_mag, 0, 0, mag);
+
+    // copyScreen();
 
     // Calculate the time passed in the current revolution
     unsigned long currentTimeMicros = now - usRevStartTime;
@@ -652,7 +690,7 @@ void handleMeltybrainDrive() {
     float cos_ph2 = reshapeCos(cos(ph2));
 
     float mixFrac = 0.25f;
-    float baseLevel = throttle + speedLen * mixFrac;
+    float baseLevel = powerInput + speedLen * mixFrac;
     if (baseLevel > 1) baseLevel = 1;
     if (baseLevel > (1.0f - mixFrac)) {
       mixFrac = 1.0f - baseLevel;
@@ -674,28 +712,41 @@ void handleMeltybrainDrive() {
     bool blueLEDOn  = (cos_ph1 > 0.7071067811) ; // 45 degrees each side
     bool greenLEDOn = cos(rawAngle) > 0.7071067811;
 
-    uint8_t r = 0;
-    uint8_t b = !blueLEDOn;
-    uint8_t g = !greenLEDOn;
-    setRGB(r, g, b);
+    uint8_t r = (rps <= RPS_THRESHOLD) ? (millis() >> 4)&0x3f : 0;
+    uint8_t b = blueLEDOn ? 255 : 0;
+    uint8_t g = 0;// greenLEDOn ? 255 : 0;
+    setRGB(r, g, b, 0); // explicitly say it to remind me
+    int pp = (int)fmod(phase * 8.0, 8.0);
+    r= pp & 4 ? 255 : 0;
+    g= pp & 2 ? 255 : 0;
+    b= pp & 1 ? 255 : 0;
+    setRGB(r, g, b, 5);
+    updateLEDs(); // manually calling it here so we get it faster. NO! this is crashing it... maybe the crude lock will work....
   }
-  fadeScreen(1,4);
 }
 
 void loop() {
   // Update the IBus object for Teensy
+  checkSerial();
   ibus.loop();
+  fadeScreen(3,5);
+  copyScreen();
   if (!rc_signal_is_healthy()) {
-    setRGB(0xdede, 0x0000, 0x8282);
     ibus.loop();
     setThrottle(0, 0);
+    setCode(0402, (millis() >> 3)&0x3f ); // rrrr++bb
+    delay(50);
+    setCode(0222, (millis() >> 3)&0x3f ); // rr+gg+bb
+    delay(50);
+    setCode(0204, (millis() >> 3)&0x3f ); // rr++bbbb
     delay(50);  // stop the speedy scroll
     displayState();
     return;
   }
   updateInputs();
   if (isInTankDriveMode()) {
-    setRGB(0xff00, 0xffff, 0x00ff);  // red and blue LEDs flash slowly with green steady: tank drive
+    setCode(0202);
+    
     handleTankDrive();
     delay(5);  // give us time to do _something_. Driving around doesn't
     displayState();
@@ -703,18 +754,14 @@ void loop() {
   }
 
   if (isThrottleNearlyZero()) {
-    setRGB(0x0000, 0x2148, 0x1236);  // no error, green and blue blinking means ready, but no throttle
+    setRGB(0x70, 0x70, 0x00, 9);
     setThrottle(0, 0);
     // add code to do whatever stuff
     // we should do when not moving.
-
   } else {
-    setRGB(0, 0, 0);  // all off. at least as far as updateLEDs() is concerned.
-    handleMeltybrainDrive();
+    setCode(0);  // all off. at least as far as setCode() is concerned.
   }
-
-
+  handleMeltybrainDrive();
+  
   displayState();
-
-  checkSerial();
 }

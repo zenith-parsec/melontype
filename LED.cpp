@@ -2,10 +2,17 @@
 #include "config.h"
 #include "LED.h"
 
-#include <WS2812Serial.h>
+#include <FastLED.h>
 
-byte drawingMemory[numled*3];         //  3 bytes per LED
-DMAMEM byte displayMemory[numled*12]; // 12 bytes per LED
+
+// to change:
+// two modes:
+// normal melty mode
+// error display mode
+// force picking one.
+
+
+CRGB leds[numled];
 
 byte screen[numled*3][ledcols];
 void setPixel(uint8_t x, uint8_t y, uint8_t r, uint8_t g, uint8_t b)
@@ -19,12 +26,13 @@ void setPixel(uint8_t x, uint8_t y, uint8_t r, uint8_t g, uint8_t b)
 
 void addPixel(uint8_t x, uint8_t y, uint8_t r, uint8_t g, uint8_t b)
 {
+  if(x >= ledcols) return;
+  if(y >= numled) return;
+
   uint8_t rr = screen[y*3 + 0][x];
   uint8_t gg = screen[y*3 + 1][x];
   uint8_t bb = screen[y*3 + 2][x];
   int t;
-  if(x >= ledcols) return;
-  if(y >= numled) return;
   
   t = rr + r;
   if( t >= 256 ) t= 255;
@@ -59,66 +67,74 @@ void fadeScreen(uint8_t m, uint8_t d)
 }
 
 
-WS2812Serial leds(numled, displayMemory, drawingMemory, LEDpin, WS2812_GRB);
 IntervalTimer ledTimer;
 
 // Variables to store the current LED states (16-bit values)
-volatile uint16_t redState   = 0x0000;
-volatile uint16_t greenState = 0x0000;
-volatile uint16_t blueState  = 0x0000;
+volatile uint16_t statusCode   = 0x0000;
 
 void initLEDs() {
-  // Configure the LED pins as outputs
-  leds.begin();
-  // Start the timer to call updateLEDs() regularly
-  ledTimer.begin(updateLEDs, 50000);  // 50,000 microseconds = 50 milliseconds
   // doing it here coz.. it's an LED, I guess.
-
   pinMode(13, OUTPUT);          // this is the Teensy built-in LED
   digitalWriteFast(13, HIGH);   // turning it high so you can see reached here.
+  // Configure the LED pins as outputs
+  FastLED.addLeds<NEOPIXEL, LEDpin>(leds, numled); 
+  // Start the timer to call updateLEDs() regularly
+  ledTimer.begin(updateLEDs, 12500);  // 12,500 microseconds = 12.5 milliseconds
   Serial.println("LEDs initialized in interval timer.");
 }
-
-static bool rgbIsZero = false;
-static bool rgbWasZero = false;
 
 // Function to set the RGB LED states
 void setRGB(uint16_t r, uint16_t g, uint16_t b, uint8_t idx) {
   // Update the red, green, and blue states with the provided values
   if(idx < 0) return;
   if(idx >= numled) return;
+  bool waszero = (idx == 0);
   idx = numled -1 - idx; // fix for me doing it backwards
-  uint32_t color = ((r&0xff)<<16) | ((g&0xff)<< 8) | (b&0xff);
-  
-  leds.setPixel(idx, color);
-
-  if(idx == 0)
+  CRGB color = CRGB(r,g,b);
+  leds[idx]= color;
+  if(waszero) 
   {
-    redState = r;
-    greenState = g;
-    blueState = b;
-
-    rgbWasZero = rgbIsZero;
-    rgbIsZero = ( redState + greenState + blueState ) == 0;
+    leds[idx-1]= color;
+    leds[idx-2]= color;
+    leds[idx-3]= color;
+    digitalWriteFast(13, r > 0 ? HIGH : LOW);
   }
 }
 
-// Function to update the LED states based on bit patterns
+
 void updateLEDs() 
 {
-  static uint8_t idx = 0;  // Static variable to track the current bit (0-15)
-  
-  if(idx || !rgbWasZero || !rgbIsZero)
+  static volatile int inUpdate = 0;
+  inUpdate++;
+  if( inUpdate == 1 )
   {
-  // Set the LED values based on the i-th bit of each state's bitmask
-    
-    uint8_t rr = ((redState   >> idx) & 0x1) ? 28 :0; 
-    uint8_t gg = ((greenState >> idx) & 0x1) ? 28 :0; 
-    uint8_t bb = ((blueState  >> idx) & 0x1) ? 18 :0; 
-
-    setRGB(rr, gg, bb, 0 ); 
+    FastLED.show();
   }
-  leds.show();
-  // Increment i and mask with 0xF to keep it within 0-15 (16 steps)
-  idx = (idx + 1) & 0xF;
+  inUpdate--;
 }
+
+uint16_t curCode = 0;
+// this sets like 12 or 15 pixels with a value
+void setCode(uint16_t code, uint8_t u_val, uint8_t v_val)
+{
+  curCode = code;
+  uint8_t u = u_val;
+  uint8_t v = v_val;
+  // ok this is the cool idea i had: #R #G #B is the code, then
+  // variable length outputs with #R red leds, a gap, #G green leds, 
+  // a gap, and #B blue leds.
+  uint8_t r = (code&0700)>>6;
+  uint8_t g = (code&0070)>>3;
+  uint8_t b = (code&0007)>>0;
+  uint8_t idx = 0;
+  while(idx < numled)
+  {
+    for(int k = 0; k < r && k < 5; k++) { setRGB(u,v,v,idx++); }
+    setRGB(v,v,v,idx++);
+    for(int k = 0; k < g && k < 5; k++) { setRGB(v,u,v,idx++); }
+    setRGB(v,v,v,idx++);
+    for(int k = 0; k < b && k < 5; k++) { setRGB(v,v,u,idx++); }
+    setRGB(v,v,v,idx++);
+  }
+}
+
