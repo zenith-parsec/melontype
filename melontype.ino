@@ -7,6 +7,7 @@
 #include "Adafruit_H3LIS331.h"
 #include "config.h"
 #include "LED.h"
+#include "font.h"
 
 #include <ArduinoEigen.h>
 
@@ -209,8 +210,8 @@ void initAccel() {
   }
 
   // Configure the accelerometer settings
-  lis.setDataRate(LIS331_DATARATE_100_HZ); // perhaps it will be more accurate at a lower rate. only need it about this often
-  lis.setRange(H3LIS331_RANGE_200_G);
+  lis.setDataRate(LIS331_DATARATE_400_HZ); // perhaps it will be more accurate at a lower rate. only need it about this often
+  lis.setRange(H3LIS331_RANGE_100_G);
   // lis.setLPFCutoff(lis331_lpf_cutoff_t cutoff) won't help: it doesn't work in NORMAL mode.
       
   Serial.println("Accelerometer initialized successfully.");
@@ -287,6 +288,16 @@ void collectCalibrationData() {
 
   Serial.println("Calibration completed. Offsets stored.");
 }
+// rc_signal_is_healthy() human readable flow:
+// start of by intending to say we are not healthy when we return.
+// if we have seen a message in the last 500ms, 
+//   then we're now going to say we're healthy when we return.
+// if we haven't seen one,
+//   then we'll check for one.
+// if either of these ibus counters have changed since the last time we checked,
+//   then we're now going to say we are healthy when we return.
+//   we also update our copy of those counters.
+// return our health status
 
 bool rc_signal_is_healthy() {
   uint32_t now = millis();
@@ -498,7 +509,7 @@ int getSituation(float x, float y, float z)
   return 0;
 }
 
-float filterAlpha = 0.1;
+float filterAlpha = 0.2;
 float previousFilteredReading = 0.0;
 
 // Apply a low-pass filter to the accelerometer reading
@@ -507,17 +518,21 @@ float lowPassFilter(float currentReading) {
   return previousFilteredReading;
 }
 
-float rawAngle = 0;
-float rawMagnitude = 0;
-float phase = 0; // bad global variable name, but it's the current phase
+float accelAngle = 0;
+float accelMag = 0;
+float angularPosition = 0; // bad global variable name, but it's the current phase
 
 // Function to get the magnitude of the acceleration due to spinning (force on the X-axis)
 // while rejecting gravity (the Z-axis) and acceleration (the Y-axis).
 float getSpinAcceleration() {
-  // Get current accelerometer readings
-  sensors_event_t s;
+  static sensors_event_t s;
+  static uint32_t last_sensor_time = 0xface1e55; // impossible initial timestep
+  static float lastMagnitude;
+  uint32_t now = millis();
+  if(now == last_sensor_time) return lastMagnitude; // check is for equality. can't do range. also need to change initial value if condition changed.
+  last_sensor_time = now;
+     // Get current accelerometer readings
   lis.getEvent(&s);
-
 
   // Subtract calibration offsets
   float x = s.acceleration.x - accelOffsetX;
@@ -525,18 +540,19 @@ float getSpinAcceleration() {
   float z = s.acceleration.z - accelOffsetZ;
   
   static uint32_t nextDisp = 0;
-  uint32_t now = millis();
+
   if(now >= nextDisp)
   {
     nextDisp = now + 250;
     Serial.printf("accel = %f, %f, %f\n", x, y, z);
   }
 
-  rawAngle = atan2(y, x);
-  rawMagnitude = sqrt(x * x + y * y); // + z * z); currently ignoring Z. see below
-  
-  return lowPassFilter(rawMagnitude);
-  
+  accelAngle = atan2(y, x);
+  accelMag = sqrt(x * x + y * y); // + z * z); currently ignoring Z. see below
+  accelMag = lowPassFilter(accelMag);
+  if(accelMag < min_rotation_G) accelMag = min_rotation_G;
+  lastMagnitude = accelMag;
+  return accelMag;
 }
 
 // Function to calculate revolutions per second based on spin acceleration
@@ -571,9 +587,39 @@ float reshapeCos(float a) {
   return c;
 }
 
+void updateLEDDisplay(float phase, float rps, float throttle) {
+    uint8_t columnData[8];  // Assuming 12 LEDs per column
+    
+    // Display RPM in first half of rotation in blue
+    if (phase < 0.5) {
+        uint16_t rpm = (uint16_t)(rps * 60.0f);  // Convert RPS to RPM
+        getColumnData(rpm, phase * 2.0f, false, columnData);
+        for (int i = 0; i < 8; i++) {
+            if (columnData[i]) {
+                setRGB(0, 0, 255, i+4);  // Blue for RPM
+            } else {
+                setRGB(0, 0, 0, i+4);    // Off if no pixel
+            }
+        }
+    }
+    // Display throttle in second half of rotation in green
+    else {
+        uint16_t throttleDisplay = (uint16_t)(throttle * 100.0f);  // Scale throttle to percentage
+        getColumnData(throttleDisplay, phase * 2.0f - 1.0f, false, columnData);
+        for (int i = 0; i < 8; i++) {
+            if (columnData[i]) {
+                setRGB(0, 255, 0, i+4);  // Green for throttle
+            } else {
+                setRGB(0, 0, 0, i+4);    // Off if no pixel
+            }
+        }
+    }
+}
+
+
 void copyScreen()
 {
-  int now_pos = (int)(ledcols * fmod(phase + rawAngle, 1.0)); // angle relative to phase, i think?
+  int now_pos = (int)(ledcols * fmod(angularPosition + accelAngle, 1.0)); // angle relative to phase, i think?
   for(int i = 4; i < numled; i++)
   {
     uint8_t r = screen[i * 3 + 0][now_pos];
@@ -601,38 +647,28 @@ void handleMeltybrainDrive() {
     // Calculate revolutions per second (RPS)
     float rps = calculateRPS();
 
-  
-    // If RPS is below the threshold, pretend it's at the threshold and blink on the red light so we know we can't translate.
-    // we also set the stickLength (the desired translation amount) to zero.
-    if (rps < RPS_THRESHOLD) {
-      rps = RPS_THRESHOLD;
-      setRGB(0x80, 0x50, 0x50, 9); // if the y
-      stickLength = 0.0;
-    } else {
-//      setRGB(0x0000, 0x0000, 0x0000);
-    }
     // Calculate the time for one complete revolution in microseconds
-    unsigned long revTimeMicros = (1000000 / rps);
+    unsigned long revTimeMicros = (unsigned long)(1000000.0f / rps);
 
     unsigned long now = micros();
     // When revTimeMicros is updated to a new value:
 
     // Calculate the phase angle in the previous rotation period (0 to 1)
-    phase = (float)(now - usRevStartTime) / prevRevTimeMicros;
+    angularPosition = (float)(now - usRevStartTime) / prevRevTimeMicros; 
 
     if (revTimeMicros != prevRevTimeMicros) {
       unsigned long elapsedTime = now - prevTimeMicros;
 
-      float oldPhase = phase;
+      float oldAngularPosition = angularPosition;
       // Account for elapsed time since last step
-      oldPhase += (float)elapsedTime / prevRevTimeMicros;
+      oldAngularPosition += (float)elapsedTime / prevRevTimeMicros;
 
       // Normalize phase to 0-1 range
-      oldPhase = fmod(oldPhase, 1.0);
-      phase = oldPhase;
+      oldAngularPosition = fmod(oldAngularPosition, 1.0);
+      angularPosition = oldAngularPosition;
 
       // Convert the phase to the new rotation period
-      usRevStartTime = now - (unsigned long)(oldPhase * revTimeMicros);
+      usRevStartTime = now - (unsigned long)(oldAngularPosition * revTimeMicros);
 
       // Update previous values
       prevRevTimeMicros = revTimeMicros;
@@ -641,10 +677,10 @@ void handleMeltybrainDrive() {
     }
 
 
-    // int now_pos = (int)(ledcols * fmod(phase + rawAngle, 1.0));
+    // int now_pos = (int)(ledcols * fmod(phase + accelAngle  , 1.0));
 
-    // uint8_t mag = rawMagnitude;
-    // int i_mag = (int)(log(rawMagnitude) * 2.0);
+    // uint8_t mag = accelMag  ;
+    // int i_mag = (int)(log(accelMag) * 2.0);
     // if(i_mag > ledcols - 1) i_mag = ledcols -1;
     // i_mag += 4;
     // addPixel(now_pos, i_mag, 0, 0, mag);
@@ -710,19 +746,33 @@ void handleMeltybrainDrive() {
     // also coincides with motor pulses.
 
     bool blueLEDOn  = (cos_ph1 > 0.7071067811) ; // 45 degrees each side
-    bool greenLEDOn = cos(rawAngle) > 0.7071067811;
+    bool greenLEDOn = cos(accelAngle) > 0.7071067811;
 
-    uint8_t r = (rps <= RPS_THRESHOLD) ? (millis() >> 4)&0x3f : 0;
+    // setRGB(x, y, z, 0) sets the first 4 LEDs to the same color. (the ones on the far end are first.)
+    uint8_t r = 0;
     uint8_t b = blueLEDOn ? 255 : 0;
     uint8_t g = 0;// greenLEDOn ? 255 : 0;
-    setRGB(r, g, b, 0); // explicitly say it to remind me
-    int pp = (int)fmod(phase * 8.0, 8.0);
-    r= pp & 4 ? 255 : 0;
-    g= pp & 2 ? 255 : 0;
-    b= pp & 1 ? 255 : 0;
-    setRGB(r, g, b, 5);
-    updateLEDs(); // manually calling it here so we get it faster. NO! this is crashing it... maybe the crude lock will work....
-  }
+    setRGB(r, g, b, 0);
+
+    // draws 8 colors in a circle: black, red, green, yellow, blue, magenta, cyan, white
+    int pp = (int)fmod(angularPosition * 8.0, 8.0);
+    r= pp & 4 ? 32 : 0;
+    g= pp & 2 ? 32 : 0;
+    b= pp & 1 ? 32 : 0;
+    setRGB(r, g, b, 6);
+
+    // this should display numbers.
+    updateLEDDisplay(angularPosition, rps, powerInput);
+
+    updateLEDs(); // manually calling it here so we get it faster. lock seems to work fine.
+    static unsigned long lastBreakCheck = 0;
+    if (now - lastBreakCheck > 1000000) { // 1 second
+        lastBreakCheck = now;
+        break;
+    }
+    if(isInTankDriveMode()) break;
+
+  } // end of handleMeltybrainDrive while(1) loop
 }
 
 void loop() {
@@ -735,11 +785,13 @@ void loop() {
     ibus.loop();
     setThrottle(0, 0);
     setCode(0402, (millis() >> 3)&0x3f ); // rrrr++bb
-    delay(50);
+    delay(100);
     setCode(0222, (millis() >> 3)&0x3f ); // rr+gg+bb
-    delay(50);
+    delay(100);
     setCode(0204, (millis() >> 3)&0x3f ); // rr++bbbb
-    delay(50);  // stop the speedy scroll
+    delay(100);  // stop the speedy scroll
+    setCode(0222, (millis() >> 3)&0x3f ); // rr+gg+bb
+    delay(100);
     displayState();
     return;
   }
@@ -754,12 +806,10 @@ void loop() {
   }
 
   if (isThrottleNearlyZero()) {
-    setRGB(0x70, 0x70, 0x00, 9);
+    setRGB(0x70, 0x70, 0x00, 5); // "zero throttle" detected so LED[9] = yellow
     setThrottle(0, 0);
-    // add code to do whatever stuff
-    // we should do when not moving.
   } else {
-    setCode(0);  // all off. at least as far as setCode() is concerned.
+    setCode(0);  // all off? this may need to change
   }
   handleMeltybrainDrive();
   
