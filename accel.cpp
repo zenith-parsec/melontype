@@ -46,7 +46,7 @@ void initAccel() {
   }
 
   // Configure the accelerometer settings
-  lis.setDataRate(LIS331_DATARATE_100_HZ); // perhaps it will be more accurate at a lower rate?. only need it about this often
+  lis.setDataRate(LIS331_DATARATE_50_HZ); // perhaps it will be more accurate at a lower rate?. only need it about this often: once every 20ms should be fast enough at least for now.
   lis.setRange(H3LIS331_RANGE_100_G); // shouldn't reach 100g before getting lock: at 54mm radius 100G equals 1300 RPM
       
   Serial.println("Accelerometer initialized successfully.");
@@ -68,7 +68,7 @@ void collectCalibrationData() {
   // Collect sensor event samples 
   // more samples = more better? Also, soon we rewrite this.
 
-  int sampleCount = 500;  // more samples more 
+  int sampleCount = 128;  // more samples more 
   float xSum = 0, ySum = 0, zSum = 0;
 
   for (int i = 0; i < sampleCount; i++) {
@@ -122,13 +122,15 @@ float lowPassFilter(float currentReading) {
 // Function to get the magnitude of the acceleration due to spinning (force on the X-axis)
 // while rejecting gravity (the Z-axis) and acceleration (the Y-axis).
 
+
 float getSpinAcceleration() {
-  static sensors_event_t s;
-  static uint32_t next_sensor_time = 0; // impossible initial timestep
   static float lastMagnitude;
   uint32_t now = millis();
+  static uint32_t next_sensor_time = 0; // impossible initial timestep
   if(now < next_sensor_time) return lastMagnitude; // we just return the same value for 40ms at a time, then get another one.
-  next_sensor_time = now + 40;
+  next_sensor_time = now + 25; // TODO: check if making this some ratio of the cycle time is smoother. 
+
+  sensors_event_t s = {0,};
      // Get current accelerometer readings
   lis.getEvent(&s);
 

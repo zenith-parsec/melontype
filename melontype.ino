@@ -401,7 +401,7 @@ float calculateRPS() {
   // Use the dynamically updated radiusSize as the spin radius (in meters)
   float spinRadius = radiusSize;  // radiusSize is in meters. expected range is from at least 1mm to about 10cm.
 
-  if (spinRadius < 0.001) spinRadius = 0.001; // this should only happen if it's starting up, I think. this stop divide by zero.
+  if (spinRadius < 0.001) spinRadius = 0.001; // this should only happen if it's starting up, I think. this will stop divide by zero.
   // Calculate angular velocity (omega) in radians per second
   float omega = sqrt(spinAccel / spinRadius);
 
@@ -412,9 +412,8 @@ float calculateRPS() {
 }
 
 unsigned long usRevStartTime = 0;  // Time in microseconds when the revolution started
-
-unsigned long prevRevTimeMicros = 1000000 / 400;  // Store the previous rotation period
-unsigned long prevTimeMicros = 0;                 // Store the last timestamp
+unsigned long usPrevRevStartTime = 0;               // Store the last timestamp
+unsigned long usPrevRevDuration = 1000000 / 400;  // Store the previous rotation period
 
 // the input is the cosine of ph1 or ph2
 // the output will be a shaped cosine,
@@ -427,19 +426,33 @@ float reshapeCos(float a) {
 
 // draws RPM on the bot. hopefully. it's only 3 digits now so it might fit.
 void updateLEDDisplay(float phase, float rps, float throttle) {
-    uint8_t columnData[8];  // Assuming 12 LEDs per column
+    uint8_t columnData[8];  // Assuming 8 LEDs per column
     
-      uint16_t rpm = (uint16_t)(rps * 60.0f);  // Convert RPS to RPM
-      getColumnData(rpm, phase, false, columnData);
-      for (int i = 0; i < 7; i++) {
-          if (columnData[i]) {
-              setRGB(0, 0, 255, i+5);  // Blue for RPM
-          } else {
-              setRGB(0, 0, 0, i+5);    // Off if no pixel
-          }
+    // Display RPM in first half of rotation in blue
+    if (phase < 0.5) {
+        uint16_t rpm = (uint16_t)(rps * 60.0f);  // Convert RPS to RPM
+        getColumnData(rpm, phase * 2.0f, false, columnData);
+        for (int i = 0; i < 7; i++) {
+            if (columnData[i]) {
+                setRGB(0, 0, 255, i + 5);  // Blue for RPM
+            } else {
+                setRGB(0, 0, 0, i + 5);    // Off if no pixel
+            }
+        }
+    }
+    // Display throttle in second half of rotation in green
+    else {
+        uint16_t throttleDisplay = (uint16_t)(throttle * 100.0f);  // Scale throttle to percentage
+        getColumnData(throttleDisplay, phase * 2.0f - 1.0f, false, columnData);
+        for (int i = 0; i < 7; i++) {
+            if (columnData[i]) {
+                setRGB(0, 255, 0, i+5);  // Green for throttle
+            } else {
+                setRGB(0, 0, 0, i+5);    // Off if no pixel
+            }
+        }
     }
 }
-
 
 void copyScreen()
 {
@@ -474,31 +487,31 @@ void handleMeltybrainDrive() {
     float rps = calculateRPS();
 
     // Calculate the time for one complete revolution in microseconds
-    unsigned long revTimeMicros = (unsigned long)(1000000.0f / rps);
+    unsigned long usRevDuration = (unsigned long)(1000000.0f / rps);
 
     unsigned long now = micros();
-    // When revTimeMicros is updated to a new value:
+    // When usRevDuration is updated to a new value:
 
     // Calculate the phase angle in the previous rotation period (0 to 1)
-    angularPosition = (float)(now - usRevStartTime) / prevRevTimeMicros; 
+    angularPosition = (float)(now - usRevStartTime) / usRevDuration; 
 
-    if (revTimeMicros != prevRevTimeMicros) {
-      unsigned long elapsedTime = now - prevTimeMicros;
+    if (usRevDuration != usPrevRevDuration) {
+      unsigned long elapsedTime = now - usPrevRevStartTime;
 
       float oldAngularPosition = angularPosition;
       // Account for elapsed time since last step
-      oldAngularPosition += (float)elapsedTime / prevRevTimeMicros;
+      oldAngularPosition += (float)elapsedTime / usPrevRevDuration;
 
       // Normalize phase to 0-1 range
       oldAngularPosition = fmod(oldAngularPosition, 1.0);
       angularPosition = oldAngularPosition;
 
       // Convert the phase to the new rotation period
-      usRevStartTime = now - (unsigned long)(oldAngularPosition * revTimeMicros);
-
+      usRevStartTime = now - (unsigned long)(oldAngularPosition * usRevDuration);
+      
       // Update previous values
-      prevRevTimeMicros = revTimeMicros;
-      prevTimeMicros = now;
+      usPrevRevDuration = usRevDuration;
+      usPrevRevStartTime = now;
 
     }
 
@@ -516,12 +529,8 @@ void handleMeltybrainDrive() {
     // Calculate the time passed in the current revolution
     unsigned long currentTimeMicros = now - usRevStartTime;
     // If the current time exceeds the revolution time, exit the loop
-    if (currentTimeMicros >= revTimeMicros) {
-      Serial.print("!!!!!!!!!!!!!!!!!!!!!!!! usRevStartTime: ");
-      Serial.print(usRevStartTime);
-      Serial.print(" now: ");
-      Serial.print(now);
-      Serial.print(" delta: ");
+    if (currentTimeMicros >= usRevDuration) {
+      Serial.print("!!!!!!!!!!!!!!!!!!!!!!!! delta T: ");
       Serial.print(now - usRevStartTime);
       Serial.print(" rpm: ");
       Serial.print(rps * 60.);
@@ -529,7 +538,7 @@ void handleMeltybrainDrive() {
       Serial.println(numCalls);
       numCalls = 0;
 
-      usRevStartTime += revTimeMicros;
+      usRevStartTime += usRevDuration;
       break;
     }
 
@@ -541,13 +550,13 @@ void handleMeltybrainDrive() {
     }
 
     // Calculate timeToForward and timeToBackward
-    float timeToForward = adjustedHeading * revTimeMicros;
+    float timeToForward = adjustedHeading * usRevDuration;
 
     // for phased based speed transition for translation
     float m2PhaseOffset = 0.5;
-    float timeToBackward = timeToForward + m2PhaseOffset * revTimeMicros;
-    if (timeToBackward > revTimeMicros) {
-      timeToBackward -= revTimeMicros;
+    float timeToBackward = timeToForward + m2PhaseOffset * usRevDuration;
+    if (timeToBackward > usRevDuration) {
+      timeToBackward -= usRevDuration;
     }
 
     // Calculate width for motor activation checks
@@ -555,8 +564,8 @@ void handleMeltybrainDrive() {
 
     // Set the throttle for each motor using the global throttle value
     // modulated by a cosine function
-    float ph1 = ((currentTimeMicros - timeToForward) / revTimeMicros) * M_PI * 2.0f;
-    float ph2 = ((currentTimeMicros - timeToBackward) / revTimeMicros) * M_PI * 2.0f;
+    float ph1 = ((currentTimeMicros - timeToForward) / usRevDuration) * M_PI * 2.0f;
+    float ph2 = ((currentTimeMicros - timeToBackward) / usRevDuration) * M_PI * 2.0f;
 
     // reshape the cosine function so it spends more time with bigger numbers on the positive side
     // to try balance actual behavior of motors.
@@ -576,20 +585,11 @@ void handleMeltybrainDrive() {
     float th2 = (cos_ph2 * mixFrac * speedLen) + baseLevel;
 
     setThrottle(th1, -th2);  // switched signs for motor2.
-
-    // Update the LEDs to visualize the current heading.
-    // ph1 is the center front of the orbit.
-    // cos(ph1 * 2pi)  for the region 45 degrees each side of center front are all greater
-    // than 0.7071. This illuminates 1/4 of the arc for that section of each revolution.
-    // also coincides with motor pulses.
-
-    bool blueLEDOn  = (cos_ph1 > 0.7071067811) ; // 45 degrees each side
-    bool greenLEDOn = cos(accelAngle) > 0.7071067811;
-
+   
     // setRGB(x, y, z, 0) sets the first 4 LEDs to the same color. (the ones on the far end are first.)
-    uint8_t r = 0;
-    uint8_t b = blueLEDOn ? 255 : 0;
-    uint8_t g = 0;// greenLEDOn ? 255 : 0;
+    uint8_t r = cos_ph2 > 0 ? (uint8_t)(cos_ph2 * 64 ) : 32;
+    uint8_t b = cos_ph1 > 0 ? (uint8_t)(cos_ph1 * 255 ) : 0;
+    uint8_t g = cos_ph2 > 0 ? (uint8_t)(cos_ph2 * 64 ) : 32;
     setRGB(r, g, b, 0);
 
     // draws 8 colors in a circle: black, red, green, yellow, blue, magenta, cyan, white
@@ -609,8 +609,6 @@ void handleMeltybrainDrive() {
         break;
     }
     if(isInTankDriveMode()) break;
-    delayMicroseconds(500);
-
   } // end of handleMeltybrainDrive while(1) loop
 }
 
