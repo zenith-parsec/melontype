@@ -4,16 +4,13 @@
 // previous header comment/documentation is now in "original_header.h"
 
 #include <IBusBM.h>
-#include "Adafruit_H3LIS331.h"
 #include "config.h"
 #include "LED.h"
+#include "accel.h"
 #include "font.h"
-
-#include <ArduinoEigen.h>
 
 // Declare objects and variables
 IBusBM ibus;  // IBus object for the radio receiver
-Adafruit_H3LIS331 lis = Adafruit_H3LIS331();
 
 void pwmInterruptHandler();
 
@@ -23,11 +20,6 @@ IntervalTimer pwmTimer;
 
 bool pwmIntCalled;
 bool doResetStats = false;
-
-// acceleration offsets due to gravity
-float accelOffsetX = 0.0;
-float accelOffsetY = 0.0;
-float accelOffsetZ = 0.0;
 
 volatile uint32_t last_ibus_seen_millis;
 volatile uint8_t last_cnt_rec;
@@ -185,109 +177,6 @@ void checkSerial() {
   }
 }
 
-void initAccel() {
-  setCode(0011); 
-  // remove attempt to power I2C device from GPIO: powered from 3v3 directly now
-  // - higher current available and it's what it's for
-
-  if (!lis.begin_I2C(ACCEL_I2C_ADDR)) {
-    Serial.println("Failed to initialize accelerometer!");
-    Serial.println("Use serial commands now if you want. I don't care.");
-    Serial.flush();
-    while (1) {
-      checkSerial();  // for command parsing and stuff.
-      updateInputs();  // update the inputs
-      fadeScreen(1,4);
-      displayState();      
-      //updateLEDs(); 
-      setCode(0203); // 2 red, 0 green, 3 blue
-      delay(50);  // 
-      setCode( 0230); // 2 red, 3 green, 0 blue
-      delay(50);  
-    }
-    // We stop the system if the accelerometer initialization fails.
-    // it's kind of important.
-  }
-
-  // Configure the accelerometer settings
-  lis.setDataRate(LIS331_DATARATE_400_HZ); // perhaps it will be more accurate at a lower rate. only need it about this often
-  lis.setRange(H3LIS331_RANGE_100_G);
-  // lis.setLPFCutoff(lis331_lpf_cutoff_t cutoff) won't help: it doesn't work in NORMAL mode.
-      
-  Serial.println("Accelerometer initialized successfully.");
-  setCode(0020);
-}
-
-Eigen::Matrix3f rotationMatrix;
-
-void generateRotationMatrix() {
-  Eigen::Vector3f gravityVector(accelOffsetX, accelOffsetY, accelOffsetZ);
-  // Normalize gravity vector (Z-axis)
-  Eigen::Vector3f zAxis = gravityVector.normalized();
-
-  // Assume the robot will spin later; define Y (forward vector)
-  Eigen::Vector3f yAxis(0, 1, 0);  // Placeholder forward vector
-
-  // Compute X (rotation vector, perpendicular to Z and Y)
-  Eigen::Vector3f xAxis = yAxis.cross(zAxis).normalized();
-
-  // Recompute Y to ensure orthogonality
-  yAxis = zAxis.cross(xAxis).normalized();
-
-  // Create the rotation matrix
-  rotationMatrix.col(0) = xAxis;  // X
-  rotationMatrix.col(1) = yAxis;  // Y
-  rotationMatrix.col(2) = zAxis;  // Z
-}
-
-void collectCalibrationData() {
-  Serial.println("Starting accelerometer calibration. Keep still.");
-  // Set LEDs to blink a low-level warning for 2 seconds
-  for(int i = 0; i < 6; i++)
-  {
-    setCode(0012); // 0r 1g 2b
-    delay(200);
-    setCode(0021); // 0r 2g 1b
-    delay(200);
-  }
-  // Set LEDs to blink twice as fast while calibrating
-  setCode(0102);  // red, black, black, blue, black, etc
-  // Collect sensor event samples 
-  // more samples = more better? Also, soon we rewrite this.
-
-  int sampleCount = 500;  // more samples more 
-  float xSum = 0, ySum = 0, zSum = 0;
-
-  for (int i = 0; i < sampleCount; i++) {
-    sensors_event_t s;
-    lis.getEvent(&s);  // Retrieve accelerometer data
-
-    // Sum the accelerometer values to calculate the average later
-    xSum += s.acceleration.x;
-    ySum += s.acceleration.y;
-    zSum += s.acceleration.z;
-
-    delayMicroseconds(2500);  // Wait for 2500µs between samples
-  }
-  setCode(0010); 
-
-  Serial.println("Accelerometer samples collected");
-
-  // Calculate the average values (gravity vector calibration)
-  float xOffset = xSum / (float)sampleCount;
-  float yOffset = ySum / (float)sampleCount;
-  float zOffset = zSum / (float)sampleCount;
-
-  // Store these offsets for future sensor calibration
-  // Assume you have a global variable to store these offsets
-  accelOffsetX = xOffset;
-  accelOffsetY = yOffset;
-  accelOffsetZ = zOffset;
-
-  generateRotationMatrix(); 
-
-  Serial.println("Calibration completed. Offsets stored.");
-}
 // rc_signal_is_healthy() human readable flow:
 // start of by intending to say we are not healthy when we return.
 // if we have seen a message in the last 500ms, 
@@ -448,7 +337,7 @@ void updateInputs() {
 
   // Read radius input (channel 4) and map it to 1mm to 100mm
   radiusInput = ibus.readChannel(4);
-  radiusSize = map(radiusInput, 1000, 2000, 0.001, 0.100);  // Result in meters (1mm to 100 mm)
+  radiusSize = map(radiusInput, 1000, 2000, 0.020, 0.080);  // Result in meters (limit to 20mm to 80 mm) 
 
   // Read LED offset input (channel 5).
   float ch5 = ibus.readChannel(5);
@@ -504,66 +393,15 @@ void displayState() {
   }
 }
 
-int getSituation(float x, float y, float z)
-{
-  return 0;
-}
-
-float filterAlpha = 0.2;
-float previousFilteredReading = 0.0;
-
-// Apply a low-pass filter to the accelerometer reading
-float lowPassFilter(float currentReading) {
-  previousFilteredReading = filterAlpha * currentReading + (1.0 - filterAlpha) * previousFilteredReading;
-  return previousFilteredReading;
-}
-
-float accelAngle = 0;
-float accelMag = 0;
-float angularPosition = 0; // bad global variable name, but it's the current phase
-
-// Function to get the magnitude of the acceleration due to spinning (force on the X-axis)
-// while rejecting gravity (the Z-axis) and acceleration (the Y-axis).
-float getSpinAcceleration() {
-  static sensors_event_t s;
-  static uint32_t last_sensor_time = 0xface1e55; // impossible initial timestep
-  static float lastMagnitude;
-  uint32_t now = millis();
-  if(now == last_sensor_time) return lastMagnitude; // check is for equality. can't do range. also need to change initial value if condition changed.
-  last_sensor_time = now;
-     // Get current accelerometer readings
-  lis.getEvent(&s);
-
-  // Subtract calibration offsets
-  float x = s.acceleration.x - accelOffsetX;
-  float y = s.acceleration.y - accelOffsetY;
-  float z = s.acceleration.z - accelOffsetZ;
-  
-  static uint32_t nextDisp = 0;
-
-  if(now >= nextDisp)
-  {
-    nextDisp = now + 250;
-    Serial.printf("accel = %f, %f, %f\n", x, y, z);
-  }
-
-  accelAngle = atan2(y, x);
-  accelMag = sqrt(x * x + y * y); // + z * z); currently ignoring Z. see below
-  accelMag = lowPassFilter(accelMag);
-  if(accelMag < min_rotation_G) accelMag = min_rotation_G;
-  lastMagnitude = accelMag;
-  return accelMag;
-}
-
 // Function to calculate revolutions per second based on spin acceleration
 float calculateRPS() {
   // Get the spin acceleration (centripetal force)
   float spinAccel = getSpinAcceleration();
-
+  if(spinAccel < 1) spinAccel  = 1;
   // Use the dynamically updated radiusSize as the spin radius (in meters)
-  float spinRadius = radiusSize;  // radiusSize is in meters. expected range is from 0.001m to 0.1m
+  float spinRadius = radiusSize;  // radiusSize is in meters. expected range is from at least 1mm to about 10cm.
 
-  if (spinRadius < 0.001) spinRadius = 0.001;
+  if (spinRadius < 0.001) spinRadius = 0.001; // this should only happen if it's starting up, I think. this stop divide by zero.
   // Calculate angular velocity (omega) in radians per second
   float omega = sqrt(spinAccel / spinRadius);
 
@@ -587,32 +425,18 @@ float reshapeCos(float a) {
   return c;
 }
 
+// draws RPM on the bot. hopefully. it's only 3 digits now so it might fit.
 void updateLEDDisplay(float phase, float rps, float throttle) {
     uint8_t columnData[8];  // Assuming 12 LEDs per column
     
-    // Display RPM in first half of rotation in blue
-    if (phase < 0.5) {
-        uint16_t rpm = (uint16_t)(rps * 60.0f);  // Convert RPS to RPM
-        getColumnData(rpm, phase * 2.0f, false, columnData);
-        for (int i = 0; i < 8; i++) {
-            if (columnData[i]) {
-                setRGB(0, 0, 255, i+4);  // Blue for RPM
-            } else {
-                setRGB(0, 0, 0, i+4);    // Off if no pixel
-            }
-        }
-    }
-    // Display throttle in second half of rotation in green
-    else {
-        uint16_t throttleDisplay = (uint16_t)(throttle * 100.0f);  // Scale throttle to percentage
-        getColumnData(throttleDisplay, phase * 2.0f - 1.0f, false, columnData);
-        for (int i = 0; i < 8; i++) {
-            if (columnData[i]) {
-                setRGB(0, 255, 0, i+4);  // Green for throttle
-            } else {
-                setRGB(0, 0, 0, i+4);    // Off if no pixel
-            }
-        }
+      uint16_t rpm = (uint16_t)(rps * 60.0f);  // Convert RPS to RPM
+      getColumnData(rpm, phase, false, columnData);
+      for (int i = 0; i < 7; i++) {
+          if (columnData[i]) {
+              setRGB(0, 0, 255, i+5);  // Blue for RPM
+          } else {
+              setRGB(0, 0, 0, i+5);    // Off if no pixel
+          }
     }
 }
 
@@ -629,14 +453,16 @@ void copyScreen()
   }
 }  
 
+
 // it also does so much else. working on refactoring it. 
 // TODO: refactor handleMeltybraindrive()
 void handleMeltybrainDrive() {
-
+  static uint32_t numCalls = 0;
   // Get the current time in microseconds
   static unsigned long usRevStartTime = micros();
   // Enter loop for an entire revolution
   while (true) {
+    numCalls++;
     if (!rc_signal_is_healthy()) {  // we need to bail this loop if we lose signal.
 //      return;                       // next loop() call will zero throttle etc // lies. just force power to zero.
       stickLength = 0.0;
@@ -691,6 +517,18 @@ void handleMeltybrainDrive() {
     unsigned long currentTimeMicros = now - usRevStartTime;
     // If the current time exceeds the revolution time, exit the loop
     if (currentTimeMicros >= revTimeMicros) {
+      Serial.print("!!!!!!!!!!!!!!!!!!!!!!!! usRevStartTime: ");
+      Serial.print(usRevStartTime);
+      Serial.print(" now: ");
+      Serial.print(now);
+      Serial.print(" delta: ");
+      Serial.print(now - usRevStartTime);
+      Serial.print(" rpm: ");
+      Serial.print(rps * 60.);
+      Serial.print(" num: ");
+      Serial.println(numCalls);
+      numCalls = 0;
+
       usRevStartTime += revTimeMicros;
       break;
     }
@@ -725,7 +563,7 @@ void handleMeltybrainDrive() {
     float cos_ph1 = reshapeCos(cos(ph1));
     float cos_ph2 = reshapeCos(cos(ph2));
 
-    float mixFrac = 0.25f;
+    float mixFrac = 0.15f;
     float baseLevel = powerInput + speedLen * mixFrac;
     if (baseLevel > 1) baseLevel = 1;
     if (baseLevel > (1.0f - mixFrac)) {
@@ -759,18 +597,19 @@ void handleMeltybrainDrive() {
     r= pp & 4 ? 32 : 0;
     g= pp & 2 ? 32 : 0;
     b= pp & 1 ? 32 : 0;
-    setRGB(r, g, b, 6);
+    setRGB(r, g, b, 4);
 
     // this should display numbers.
     updateLEDDisplay(angularPosition, rps, powerInput);
 
     updateLEDs(); // manually calling it here so we get it faster. lock seems to work fine.
     static unsigned long lastBreakCheck = 0;
-    if (now - lastBreakCheck > 1000000) { // 1 second
+    if (now - lastBreakCheck > 1500000) { // 1 seconds
         lastBreakCheck = now;
         break;
     }
     if(isInTankDriveMode()) break;
+    delayMicroseconds(500);
 
   } // end of handleMeltybrainDrive while(1) loop
 }

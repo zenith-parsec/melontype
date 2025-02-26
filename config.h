@@ -37,7 +37,7 @@ const float boostSpeed = 0.5;
 const unsigned long baseCycleTime = 50;  
 const unsigned long coolDownTime = 100;
 
-const float min_rotation_G = 1.0;
+const float min_rotation_G = 9.8;
 
 
 #endif

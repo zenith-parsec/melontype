@@ -26,7 +26,7 @@ const uint8_t digitBitmaps[10][5] = {
 // returns array of 0 and 1 for respective LED off and on.
 void getColumnData(uint16_t number, float phase, bool reverse, uint8_t* columnData) {
     char numStr[10];
-    snprintf(numStr, sizeof(numStr), "%5u", number); // Convert number to string
+    snprintf(numStr, sizeof(numStr), "%3.3u", number); // Convert number to string
     uint8_t numDigits = strlen(numStr);
 
     const uint8_t charSpacing = 1;  // Space between digits
