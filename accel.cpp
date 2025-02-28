@@ -65,7 +65,7 @@ int getSituation(float x, float y, float z)
   return 0;
 }
 
-float filterAlpha = 0.1;
+float filterAlpha = 0.05;
 float previousFilteredReading = 0.0;
 
 // Apply a low-pass filter to the accelerometer reading

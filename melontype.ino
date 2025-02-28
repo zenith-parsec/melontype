@@ -432,7 +432,6 @@ float calculateRPS() {
 
 unsigned long usRevStartTime = 0;  // Time in microseconds when the revolution started
 unsigned long usPrevRevStartTime = 0;               // Store the last timestamp
-unsigned long usPrevRevDuration = 1000000 / 400;  // Store the previous rotation period
 
 // the input is the cosine of ph1 or ph2
 // the output will be a shaped cosine,
@@ -509,15 +508,18 @@ void handleMeltybrainDrive() {
 
   // Calculate the current revolution period based on rps
   float rps = calculateRPS();
-  unsigned long currentRevDuration = (unsigned long)(1000000.0f / rps);
+  unsigned long updatedRevDuration = (unsigned long)(1000000.0f / rps);
 
   // Increment continuous phase based on elapsed time, scaled by the current revolution period
-  continuousPhase += (float)deltaTime / currentRevDuration;
-  continuousPhase = fmod(continuousPhase, 1.0f);
+  continuousPhase += (float)deltaTime / updatedRevDuration;
+  if(continuousPhase > 1.0f)
+  {
+    usRevStartTime = now;
+    continuousPhase = fmod(continuousPhase, 1.0f);
+  }
 
   // Use continuousPhase for LED synchronization, etc.
   angularPosition = continuousPhase;
-
 
     // int now_pos = (int)(ledcols * fmod(phase + accelAngle  , 1.0));
 
@@ -530,7 +532,7 @@ void handleMeltybrainDrive() {
     // copyScreen();
 
     // Calculate the time passed in the current revolution
-    unsigned long currentTimeMicros = now - usRevStartTime;
+    unsigned long usTimeSinceZero = now - usRevStartTime;
 
 
     // Calculate the adjusted heading
@@ -540,14 +542,14 @@ void handleMeltybrainDrive() {
       adjustedHeading += 1.0;
     }
 
-    // Calculate timeToForward and timeToBackward
-    float timeToForward = adjustedHeading * currentRevDuration;
+    // Calculate usM1DelayDuration and usM2DelayDuration
+    float usM1DelayDuration = adjustedHeading * updatedRevDuration;
 
     // for phased based speed transition for translation
     float m2PhaseOffset = 0.5;
-    float timeToBackward = timeToForward + m2PhaseOffset * currentRevDuration;
-    if (timeToBackward > currentRevDuration) {
-      timeToBackward -= currentRevDuration;
+    float usM2DelayDuration = usM1DelayDuration + m2PhaseOffset * updatedRevDuration;
+    if (usM2DelayDuration > updatedRevDuration) {
+      usM2DelayDuration -= updatedRevDuration;
     }
 
     // Calculate width for motor activation checks
@@ -555,8 +557,8 @@ void handleMeltybrainDrive() {
 
     // Set the throttle for each motor using the global throttle value
     // modulated by a cosine function
-    float ph1 = ((currentTimeMicros - timeToForward) / (float)currentRevDuration) * M_PI * 2.0f;
-    float ph2 = ((currentTimeMicros - timeToBackward) / (float)currentRevDuration) * M_PI * 2.0f;
+    float ph1 = ((usTimeSinceZero - usM1DelayDuration) / (float)updatedRevDuration) * M_PI * 2.0f;
+    float ph2 = ((usTimeSinceZero - usM2DelayDuration) / (float)updatedRevDuration) * M_PI * 2.0f;
 
     // reshape the cosine function so it spends more time with bigger numbers on the positive side
     // to try balance actual behavior of motors.

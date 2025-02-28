@@ -43,7 +43,7 @@ const float min_rotation_G = 0.3;
 // basically weighted average of everything I saw when I logged it as I turned the device around.
 // should move x,y, and z all back into the range -10..10 when you do the "move it around different angles" thing. 
 const float accelOffset[3] = {
-    -0.48 , -2.39, -5.75     // chip1
+    -0.48 , -3.83, -5.75     // chip1
   //   -0.96, -0.48, 5.75      // chip2
 };
 
