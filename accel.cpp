@@ -5,21 +5,20 @@
 
 Adafruit_H3LIS331 lis = Adafruit_H3LIS331();
 
-// acceleration offsets due to gravity
-float accelOffsetX;
-float accelOffsetY;
-float accelOffsetZ;
-
-float accelAngle = 0;
-float accelMag = 0;
-float angularPosition = 0;  // phase was a bad global variable name.
+volatile float accelAngle = 0;
+volatile float accelMag = 0;
+volatile float angularPosition = 0;  // phase was a bad global variable name.
 // angularPosition this is the current position within a single rotation, represented as a number between 0 and 1.
 // The initial direction is effectively randomly chosen. you can adjust the offset with the right potentiometer on the transmitter (I'm assuming you have the FS-i6x or the FS-i6 with the 10 channel firmware patch)
 
+IntervalTimer accTimer;
+sensors_event_t sensor;
 
 extern void checkSerial();
 extern void updateInputs();
 extern void displayState();
+
+void accelEvent();
 
 void initAccel() {
   setCode(0011); 
@@ -46,63 +45,19 @@ void initAccel() {
   }
 
   // Configure the accelerometer settings
-  lis.setDataRate(LIS331_DATARATE_50_HZ); // perhaps it will be more accurate at a lower rate?. only need it about this often: once every 20ms should be fast enough at least for now.
-  lis.setRange(H3LIS331_RANGE_100_G); // shouldn't reach 100g before getting lock: at 54mm radius 100G equals 1300 RPM
+  lis.setDataRate(LIS331_DATARATE_400_HZ); 
+  lis.setRange(H3LIS331_RANGE_100_G); // at 54mm radius 100G equals 1300 RPM
       
+  accTimer.begin(accelEvent, 1e6 / 400);
+
   Serial.println("Accelerometer initialized successfully.");
   setCode(0020);
 }
 
 void collectCalibrationData() {
-  Serial.println("Starting accelerometer calibration. Keep still.");
-  // Set LEDs to blink a low-level warning for 2 seconds
-  for(int i = 0; i < 6; i++)
-  {
-    setCode(0012); // 0r 1g 2b
-    delay(200);
-    setCode(0021); // 0r 2g 1b
-    delay(200);
-  }
-  // Set LEDs to blink twice as fast while calibrating
-  setCode(0102);  // red, black, black, blue, black, etc
-  // Collect sensor event samples 
-  // more samples = more better? Also, soon we rewrite this.
-
-  int sampleCount = 128;  // more samples more 
-  float xSum = 0, ySum = 0, zSum = 0;
-
-  for (int i = 0; i < sampleCount; i++) {
-    sensors_event_t s;
-    lis.getEvent(&s);  // Retrieve accelerometer data
-
-    // Sum the accelerometer values to calculate the average later
-    xSum += s.acceleration.x;
-    ySum += s.acceleration.y;
-    zSum += s.acceleration.z;
-
-    delayMicroseconds(2500);  // Wait for 2500µs between samples
-  }
-  setCode(0010); 
-
-  Serial.println("Accelerometer samples collected");
-
-  // Calculate the average values (gravity vector calibration)
-  float xOffset = xSum / (float)sampleCount;
-  float yOffset = ySum / (float)sampleCount;
-  float zOffset = zSum / (float)sampleCount;
-
-  // Store these offsets for future sensor calibration
-  // Assume you have a global variable to store these offsets
-  accelOffsetX = xOffset;
-  accelOffsetY = yOffset;
-  accelOffsetZ = zOffset;
-
-  // temp until I work out how to deal with this.
-  accelOffsetX = 0;
-  accelOffsetY = 0;
-  accelOffsetZ = 0;
-
-  Serial.println("Calibration completed. Offsets stored.");
+  return; // this made it worse ;/
+  // will probably replace with an "offline" configuration to collect data in +/- x,y,z 
+  // and do better math?
 }
 
 int getSituation(float x, float y, float z)
@@ -110,7 +65,7 @@ int getSituation(float x, float y, float z)
   return 0;
 }
 
-float filterAlpha = 0.2;
+float filterAlpha = 0.1;
 float previousFilteredReading = 0.0;
 
 // Apply a low-pass filter to the accelerometer reading
@@ -119,45 +74,27 @@ float lowPassFilter(float currentReading) {
   return previousFilteredReading;
 }
 
-// Function to get the magnitude of the acceleration due to spinning (force on the X-axis)
-// while rejecting gravity (the Z-axis) and acceleration (the Y-axis).
-
-
-float getSpinAcceleration() {
-  static float lastMagnitude;
-  uint32_t now = millis();
-  static uint32_t next_sensor_time = 0; // impossible initial timestep
-  if(now < next_sensor_time) return lastMagnitude; // we just return the same value for 40ms at a time, then get another one.
-  next_sensor_time = now + 25; // TODO: check if making this some ratio of the cycle time is smoother. 
-
-  sensors_event_t s = {0,};
-     // Get current accelerometer readings
-  lis.getEvent(&s);
-
-  // Subtract calibration offsets
-  float x = s.acceleration.x - accelOffsetX;
-  float y = s.acceleration.y - accelOffsetY;
-  float z = s.acceleration.z - accelOffsetZ;
-  
-  static uint32_t nextDisp = 0;
-
-  if(now >= nextDisp)
+void accelEvent()
+{
+  lis.getEvent(&sensor);
+  // Subtract calibration offsets -- no don't... they should cancel out
+  // over a number of revolutions. otherwise we maybe introducing a bias from our sampling at the beginning.
+  float x = sensor.acceleration.x -= accelOffsetX;
+  float y = sensor.acceleration.y -= accelOffsetY;
+  float z = sensor.acceleration.z -= accelOffsetZ;
+  (void)(z);
+  accelAngle = atan2(y, x) / M_TWOPI;
+  // let's make the global accelMag setting slightly closer to atomic
+  // otherwise it might get referenced between lines...
+  float tmpAccelMag   =  sqrt(x * x + y * y); 
+  accelMag   = lowPassFilter(tmpAccelMag);
+  if(accelMag < min_rotation_G)
   {
-    nextDisp = now + 1000;
-    Serial.printf("accel = %f, %f, %f\n", x, y, z);
+    accelMag = min_rotation_G;
+    setRGB(0xff, 0x00, 0x00, 3);
   }
-
-  accelAngle = atan2(y, x);
-  //accelMag = sqrt(x * x + y * y); // + z * z); currently ignoring Z. see below
-  accelMag = abs(x); // let's try just the x component. the accelerometer is in a known position and orientation. it should be fine.
-  accelMag = lowPassFilter(accelMag);
-  //if(accelMag < min_rotation_G) accelMag = min_rotation_G;
-  if(accelMag < 5.0)
+  else
   {
-    accelMag = 0.001;
-    setRGB(0x3f, 0x1f, 0x1f, 4);
+    setRGB(0x00, 0xff, 0x00, 3);
   }
-  lastMagnitude = accelMag;
-  return accelMag;
-}
-
+} 

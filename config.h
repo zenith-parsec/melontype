@@ -37,7 +37,18 @@ const float boostSpeed = 0.5;
 const unsigned long baseCycleTime = 50;  
 const unsigned long coolDownTime = 100;
 
-const float min_rotation_G = 9.8;
+const float min_rotation_G = 0.3; 
 
+// empirically dereived by watching the numbers on my accelerometer.
+// basically weighted average of everything I saw when I logged it as I turned the device around.
+// should move x,y, and z all back into the range -10..10 when you do the "move it around different angles" thing. 
+const float accelOffset[3] = {
+    -0.48 , -2.39, -5.75     // chip1
+  //   -0.96, -0.48, 5.75      // chip2
+};
+
+const float accelOffsetX = accelOffset[0];
+const float accelOffsetY = accelOffset[1];
+const float accelOffsetZ = accelOffset[2];
 
 #endif

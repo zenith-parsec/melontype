@@ -8,6 +8,7 @@
 #include "LED.h"
 #include "accel.h"
 #include "font.h"
+#include "Adafruit_Sensor.h"
 
 // Declare objects and variables
 IBusBM ibus;  // IBus object for the radio receiver
@@ -337,7 +338,7 @@ void updateInputs() {
 
   // Read radius input (channel 4) and map it to 1mm to 100mm
   radiusInput = ibus.readChannel(4);
-  radiusSize = map(radiusInput, 1000, 2000, 0.020, 0.080);  // Result in meters (limit to 20mm to 80 mm) 
+  radiusSize = map(radiusInput, 1000, 2000, 0.001, 0.100);  // Result in meters (range 1 mm to 100 mm) 
 
   // Read LED offset input (channel 5).
   float ch5 = ibus.readChannel(5);
@@ -353,13 +354,31 @@ void updateInputs() {
   sw3pos = abs(ch8 - 1000) / 500;  // assuming it doesn't go too far below 1000, this should work
 }
 
+extern volatile float accelMag;
+extern sensors_event_t sensor;
+
 void displayState() {
   static uint32_t lastIdleMessage = 0;
   uint32_t now = millis();
-  if (now - lastIdleMessage > 250) {
+  if (now - lastIdleMessage > 12) {
     lastIdleMessage = now;
-
-    Serial.print("m1Throttle: ");
+//    Serial.print("accelMag: ");
+Serial.print("\t");
+    Serial.print(accelMag / SENSORS_GRAVITY_STANDARD);
+Serial.print("\t");
+//    Serial.print("  accelAngle: ");
+    Serial.print(accelAngle);
+Serial.print("\t");
+//    Serial.print("  accel.x: ");
+    Serial.print(sensor.acceleration.x);
+Serial.print("\t");
+//    Serial.print("  accel.y: ");
+    Serial.print(sensor.acceleration.y);
+Serial.print("\t");
+//    Serial.print("  accel.z: ");
+    Serial.println(sensor.acceleration.z);
+return;
+    Serial.print("  m1Throttle: ");
     Serial.print(motor1Throttle);
     Serial.print("  m2Throttle: ");
     Serial.print(motor2Throttle);
@@ -396,7 +415,7 @@ void displayState() {
 // Function to calculate revolutions per second based on spin acceleration
 float calculateRPS() {
   // Get the spin acceleration (centripetal force)
-  float spinAccel = getSpinAcceleration();
+  float spinAccel = accelMag;
   if(spinAccel < 1) spinAccel  = 1;
   // Use the dynamically updated radiusSize as the spin radius (in meters)
   float spinRadius = radiusSize;  // radiusSize is in meters. expected range is from at least 1mm to about 10cm.
@@ -472,8 +491,9 @@ void copyScreen()
 void handleMeltybrainDrive() {
   static uint32_t numCalls = 0;
   // Get the current time in microseconds
-  static unsigned long usRevStartTime = micros();
-  // Enter loop for an entire revolution
+  
+  static float continuousPhase = 0.0f;
+  static unsigned long lastPhaseUpdate = micros();
   while (true) {
     numCalls++;
     if (!rc_signal_is_healthy()) {  // we need to bail this loop if we lose signal.
@@ -483,37 +503,20 @@ void handleMeltybrainDrive() {
     }
     else updateInputs();
 
-    // Calculate revolutions per second (RPS)
-    float rps = calculateRPS();
+  unsigned long now = micros();
+  unsigned long deltaTime = now - lastPhaseUpdate;
+  lastPhaseUpdate = now;
 
-    // Calculate the time for one complete revolution in microseconds
-    unsigned long usRevDuration = (unsigned long)(1000000.0f / rps);
+  // Calculate the current revolution period based on rps
+  float rps = calculateRPS();
+  unsigned long currentRevDuration = (unsigned long)(1000000.0f / rps);
 
-    unsigned long now = micros();
-    // When usRevDuration is updated to a new value:
+  // Increment continuous phase based on elapsed time, scaled by the current revolution period
+  continuousPhase += (float)deltaTime / currentRevDuration;
+  continuousPhase = fmod(continuousPhase, 1.0f);
 
-    // Calculate the phase angle in the previous rotation period (0 to 1)
-    angularPosition = (float)(now - usRevStartTime) / usRevDuration; 
-
-    if (usRevDuration != usPrevRevDuration) {
-      unsigned long elapsedTime = now - usPrevRevStartTime;
-
-      float oldAngularPosition = angularPosition;
-      // Account for elapsed time since last step
-      oldAngularPosition += (float)elapsedTime / usPrevRevDuration;
-
-      // Normalize phase to 0-1 range
-      oldAngularPosition = fmod(oldAngularPosition, 1.0);
-      angularPosition = oldAngularPosition;
-
-      // Convert the phase to the new rotation period
-      usRevStartTime = now - (unsigned long)(oldAngularPosition * usRevDuration);
-      
-      // Update previous values
-      usPrevRevDuration = usRevDuration;
-      usPrevRevStartTime = now;
-
-    }
+  // Use continuousPhase for LED synchronization, etc.
+  angularPosition = continuousPhase;
 
 
     // int now_pos = (int)(ledcols * fmod(phase + accelAngle  , 1.0));
@@ -528,19 +531,7 @@ void handleMeltybrainDrive() {
 
     // Calculate the time passed in the current revolution
     unsigned long currentTimeMicros = now - usRevStartTime;
-    // If the current time exceeds the revolution time, exit the loop
-    if (currentTimeMicros >= usRevDuration) {
-      Serial.print("!!!!!!!!!!!!!!!!!!!!!!!! delta T: ");
-      Serial.print(now - usRevStartTime);
-      Serial.print(" rpm: ");
-      Serial.print(rps * 60.);
-      Serial.print(" num: ");
-      Serial.println(numCalls);
-      numCalls = 0;
 
-      usRevStartTime += usRevDuration;
-      break;
-    }
 
     // Calculate the adjusted heading
     float adjustedHeading = headingOffset + stickAngle;
@@ -550,13 +541,13 @@ void handleMeltybrainDrive() {
     }
 
     // Calculate timeToForward and timeToBackward
-    float timeToForward = adjustedHeading * usRevDuration;
+    float timeToForward = adjustedHeading * currentRevDuration;
 
     // for phased based speed transition for translation
     float m2PhaseOffset = 0.5;
-    float timeToBackward = timeToForward + m2PhaseOffset * usRevDuration;
-    if (timeToBackward > usRevDuration) {
-      timeToBackward -= usRevDuration;
+    float timeToBackward = timeToForward + m2PhaseOffset * currentRevDuration;
+    if (timeToBackward > currentRevDuration) {
+      timeToBackward -= currentRevDuration;
     }
 
     // Calculate width for motor activation checks
@@ -564,8 +555,8 @@ void handleMeltybrainDrive() {
 
     // Set the throttle for each motor using the global throttle value
     // modulated by a cosine function
-    float ph1 = ((currentTimeMicros - timeToForward) / usRevDuration) * M_PI * 2.0f;
-    float ph2 = ((currentTimeMicros - timeToBackward) / usRevDuration) * M_PI * 2.0f;
+    float ph1 = ((currentTimeMicros - timeToForward) / (float)currentRevDuration) * M_PI * 2.0f;
+    float ph2 = ((currentTimeMicros - timeToBackward) / (float)currentRevDuration) * M_PI * 2.0f;
 
     // reshape the cosine function so it spends more time with bigger numbers on the positive side
     // to try balance actual behavior of motors.
@@ -587,9 +578,9 @@ void handleMeltybrainDrive() {
     setThrottle(th1, -th2);  // switched signs for motor2.
    
     // setRGB(x, y, z, 0) sets the first 4 LEDs to the same color. (the ones on the far end are first.)
-    uint8_t r = cos_ph2 > 0 ? (uint8_t)(cos_ph2 * 64 ) : 32;
-    uint8_t b = cos_ph1 > 0 ? (uint8_t)(cos_ph1 * 255 ) : 0;
-    uint8_t g = cos_ph2 > 0 ? (uint8_t)(cos_ph2 * 64 ) : 32;
+    uint8_t r = 0;
+    uint8_t b = cos_ph1 > 0.7071 ? 255: 0;
+    uint8_t g = 0;
     setRGB(r, g, b, 0);
 
     // draws 8 colors in a circle: black, red, green, yellow, blue, magenta, cyan, white
@@ -604,7 +595,7 @@ void handleMeltybrainDrive() {
 
     updateLEDs(); // manually calling it here so we get it faster. lock seems to work fine.
     static unsigned long lastBreakCheck = 0;
-    if (now - lastBreakCheck > 1500000) { // 1 seconds
+    if (now - lastBreakCheck > 1000000) { // 1 seconds
         lastBreakCheck = now;
         break;
     }
@@ -622,13 +613,13 @@ void loop() {
     ibus.loop();
     setThrottle(0, 0);
     setCode(0402, (millis() >> 3)&0x3f ); // rrrr++bb
-    delay(100);
+    delay(50);
     setCode(0222, (millis() >> 3)&0x3f ); // rr+gg+bb
-    delay(100);
+    delay(50);
     setCode(0204, (millis() >> 3)&0x3f ); // rr++bbbb
-    delay(100);  // stop the speedy scroll
+    delay(50);  // stop the speedy scroll
     setCode(0222, (millis() >> 3)&0x3f ); // rr+gg+bb
-    delay(100);
+    delay(50);
     displayState();
     return;
   }
