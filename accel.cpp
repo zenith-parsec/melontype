@@ -46,23 +46,12 @@ void initAccel() {
 
   // Configure the accelerometer settings
   lis.setDataRate(LIS331_DATARATE_400_HZ); 
-  lis.setRange(H3LIS331_RANGE_100_G); // at 54mm radius 100G equals 1300 RPM
+  lis.setRange(H3LIS331_RANGE_400_G); // at 54mm radius 400G equals 2574 RPM
       
   accTimer.begin(accelEvent, 1e6 / 400);
 
   Serial.println("Accelerometer initialized successfully.");
   setCode(0020);
-}
-
-void collectCalibrationData() {
-  return; // this made it worse ;/
-  // will probably replace with an "offline" configuration to collect data in +/- x,y,z 
-  // and do better math?
-}
-
-int getSituation(float x, float y, float z)
-{
-  return 0;
 }
 
 float filterAlpha = 0.05;
@@ -77,8 +66,8 @@ float lowPassFilter(float currentReading) {
 void accelEvent()
 {
   lis.getEvent(&sensor);
-  // Subtract calibration offsets -- no don't... they should cancel out
-  // over a number of revolutions. otherwise we maybe introducing a bias from our sampling at the beginning.
+  // Subtract calibration offsets -- print out the values with the accelerometer oriented in every angle and work out the ranges and centers. 
+  // (put it 0/180 degrees on each axis for a minute or two while logging the values to calculate the offsets, then put them in accelOffset in config.h)
   float x = sensor.acceleration.x -= accelOffsetX;
   float y = sensor.acceleration.y -= accelOffsetY;
   float z = sensor.acceleration.z -= accelOffsetZ;
@@ -86,15 +75,15 @@ void accelEvent()
   accelAngle = atan2(y, x) / M_TWOPI;
   // let's make the global accelMag setting slightly closer to atomic
   // otherwise it might get referenced between lines...
-  float tmpAccelMag   =  sqrt(x * x + y * y); 
-  accelMag   = lowPassFilter(tmpAccelMag);
+  float tmpAccelMag   = abs(x); //  sqrt(x * x + y * y);
+  accelMag = lowPassFilter(tmpAccelMag);
   if(accelMag < min_rotation_G)
   {
     accelMag = min_rotation_G;
-    setRGB(0xff, 0x00, 0x00, 3);
+    setRGB(0xff, 0x00, 0x00, 11);
   }
   else
   {
-    setRGB(0x00, 0xff, 0x00, 3);
+    setRGB(0x00, 0xff, 0x00, 11);
   }
 } 

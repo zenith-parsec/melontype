@@ -9,11 +9,51 @@
 #include "accel.h"
 #include "font.h"
 #include "Adafruit_Sensor.h"
+#include "dynamic_calibration.h"
 
 // Declare objects and variables
 IBusBM ibus;  // IBus object for the radio receiver
 
 void pwmInterruptHandler();
+
+
+// Update PID constants struct to support bidirectional range
+struct PIDConstants {
+  float kP = 0.005f;      // Proportional gain
+  float kI = 0.0f; // 0.0001f;     // Integral gain
+  float kD = 0.0f; // 0.001f;      // Derivative gain
+  float MAX_RPM = 2000.0f; // Hard cap on RPM
+  float OUTPUT_CAP = 1.0f; // Maximum throttle output magnitude
+  float MIN_THROTTLE = 0.05f; // Minimum throttle magnitude to overcome friction
+  float MAX_INTEGRAL = 100.0f; // Anti-windup limit
+};
+
+// PID controller state
+struct PIDState {
+  float targetRPM = 0.0f;
+  float lastError = 0.0f;
+  float errorIntegral = 0.0f;
+  unsigned long lastPIDUpdate = 0;
+};
+
+// Phase tracking state
+struct PhaseState {
+  float continuousPhase = 0.0f;
+  unsigned long lastPhaseUpdate = 0;
+  unsigned long usRevStartTime = 0;
+};
+
+// Throttle values for both motors
+struct ThrottleValues {
+  float th1;
+  float th2;
+};
+
+// Global PID constants and state
+PIDConstants pidConstants;
+PIDState pidState;
+PhaseState phaseState;
+
 
 //HardwareSerial &iBusSerialPort = Serial2;  // digital pin 7: update ibusPin in config.h too!!!!
 HardwareSerialIMXRT &iBusSerialPort = Serial5;  // digital pin 21: update ibusPin in config.h ::::: new board only!!
@@ -46,6 +86,9 @@ volatile float headingOffset = 0.0;  // offset around circle heading light shoul
 volatile bool reverseM1 = false;
 volatile bool reverseM2 = false;
 volatile int sw3pos = 0;
+
+
+
 
 // map the throttle input so it spends more time in the low areas.
 float stretchThrottle(float throttle) {
@@ -165,10 +208,10 @@ void checkSerial() {
   if (Serial.available()) {
     char cmd = Serial.read();
     if (cmd == 'p') {
-      // print stuff
+     printCalibrationData();
     }
     if (cmd == 'c') {
-      // clear stuff
+     clearCalibrationData();
     }
     if (cmd == 'q') {
       Serial.print("Entering infinite loop so you can update or whatever. maybe enjoy the lights?\n");
@@ -206,6 +249,29 @@ bool rc_signal_is_healthy() {
   return res;
 }
 
+void wait_for_remote_signal()
+{
+  uint16_t pattern[] = { 
+0257,0357,0457,0557,0457,0357,0257,
+0247,0347,0447,0547,0447,0347,0247,
+0237,0337,0437,0537,0437,0337,
+0327,0427,0527,0427,0327,
+0237,0337,0437,0537,0437,0337,
+0247,0347,0447,0547,0447,0347,0247,
+    //0111, 0211, 0311, 0411, 0412, 0413, 0414, 0424, 0434, 0444, 0534, 0543, 0553, 0453, 0363, 0273, 0264, 0255, 0345, 0454, 0444, 0434, 0424, 0414, 0404, 0402, 0311, 0211, 
+  0xffff};
+  uint8_t i = 0;
+  while (!ibus.readChannel(0) || !rc_signal_is_healthy()) {
+    checkSerial();
+    ibus.loop();  // trying to update values
+    Serial.println("Waiting for remote signal...");
+    // just hopefully a pretty pattern
+    setCode(pattern[i++]);
+    if(pattern[i] == 0xffff)i=0;
+    delay(100); 
+  }
+}
+
 void initIBus() {
   // We need to use pin 20 so tell the hardward to use a different pin we don't care about to transmit.
   // if we don't, the FastLED code won't work.
@@ -218,16 +284,7 @@ void initIBus() {
   Serial.println("IBus receiver initialized.");
   ibus.loop();  // get the first value?
   // Validate that commands are being received
-  while (!ibus.readChannel(0)) {
-    checkSerial();
-    setCode( 0222); 
-    ibus.loop();  // trying to update values
-    Serial.println("Waiting for remote signal...");
-
-    delay(100);
-    setCode(405); 
-    delay(100); // we're async for LEDs so this is fine
-  }
+  wait_for_remote_signal();
   Serial.println("Remote signal received.");
 
   // Ensure that throttle is in the down position (assuming throttle is on channel 2)
@@ -286,8 +343,7 @@ void setup() {
   
   // Initialize accelerometer and collect calibration data
   initAccel();               // Function to initialize the accelerometer
-  collectCalibrationData();  // Function to calibrate and store offset
-  Serial.println("Accelerometer initialized and calibrated. Maybe. See above.");
+  Serial.println("Accelerometer initialized. Maybe. See above?");
 
   // Additional setup steps can go here
   Serial.println("Setup complete. Ready for operation.");
@@ -305,7 +361,7 @@ bool isInTankDriveMode() {
   return isThrottleNearlyZero() && (s < 0.25);
 }
 
-void updateInputs() {
+void updateInputs() {  
   // Read the vertical and horizontal direction control (channel 0 and 1)
   float vert = ibus.readChannel(0);   // Channel 0 (vertical)
   float horiz = ibus.readChannel(1);  // Channel 1 (horizontal)
@@ -317,7 +373,7 @@ void updateInputs() {
   // Calculate stick angle in radians as a fraction of a circle
   // ACTUALLY swapped sign of output and argume so circle starts at top and goes clockwise on stick.
   // this might make the controls work better? 
-  stickAngle = -atan2(-stickVert, stickHoriz) / (2 * PI); 
+  stickAngle = atan2(-stickVert, stickHoriz) / (2 * PI);  // swapped sign to test
 
   // Calculate stick length (magnitude) using Pythagoras' theorem
   float sl = sqrt(sq(stickVert) + sq(stickHoriz));
@@ -338,7 +394,7 @@ void updateInputs() {
 
   // Read radius input (channel 4) and map it to 1mm to 100mm
   radiusInput = ibus.readChannel(4);
-  radiusSize = map(radiusInput, 1000, 2000, 0.001, 0.100);  // Result in meters (range 1 mm to 100 mm) 
+  radiusSize = map(radiusInput, 1000, 2000, 0.040, 0.060);  // Result in meters (range 40 mm to 60 mm) 
 
   // Read LED offset input (channel 5).
   float ch5 = ibus.readChannel(5);
@@ -352,6 +408,14 @@ void updateInputs() {
 
   int ch8 = ibus.readChannel(8);
   sw3pos = abs(ch8 - 1000) / 500;  // assuming it doesn't go too far below 1000, this should work
+
+  if(!rc_signal_is_healthy())
+  {
+    stickAngle = 0;
+    stickLength = 0;
+    powerInput = 0;
+  }
+
 }
 
 extern volatile float accelMag;
@@ -362,22 +426,21 @@ void displayState() {
   uint32_t now = millis();
   if (now - lastIdleMessage > 12) {
     lastIdleMessage = now;
-//    Serial.print("accelMag: ");
-Serial.print("\t");
+//Serial.print("\t");
+    Serial.print("accelMag: ");
     Serial.print(accelMag / SENSORS_GRAVITY_STANDARD);
-Serial.print("\t");
-//    Serial.print("  accelAngle: ");
+//Serial.print("\t");
+    Serial.print("  accelAngle: ");
     Serial.print(accelAngle);
-Serial.print("\t");
-//    Serial.print("  accel.x: ");
+//Serial.print("\t");
+    Serial.print("  accel.x: ");
     Serial.print(sensor.acceleration.x);
-Serial.print("\t");
-//    Serial.print("  accel.y: ");
+//Serial.print("\t");
+    Serial.print("  accel.y: ");
     Serial.print(sensor.acceleration.y);
-Serial.print("\t");
-//    Serial.print("  accel.z: ");
+//Serial.print("\t");
+    Serial.print("  accel.z: ");
     Serial.println(sensor.acceleration.z);
-return;
     Serial.print("  m1Throttle: ");
     Serial.print(motor1Throttle);
     Serial.print("  m2Throttle: ");
@@ -433,14 +496,6 @@ float calculateRPS() {
 unsigned long usRevStartTime = 0;  // Time in microseconds when the revolution started
 unsigned long usPrevRevStartTime = 0;               // Store the last timestamp
 
-// the input is the cosine of ph1 or ph2
-// the output will be a shaped cosine,
-//  higher up in the top than the bottom.
-float reshapeCos(float a) {
-  float b = a - 1.0f;
-  float c = 1 - (b * b) * 0.5;
-  return c;
-}
 
 // draws RPM on the bot. hopefully. it's only 3 digits now so it might fit.
 void updateLEDDisplay(float phase, float rps, float throttle) {
@@ -484,125 +539,242 @@ void copyScreen()
   }
 }  
 
+// DONE: refactored handleMeltybraindrive()
+// I asked claude.ai to refactor it for me, specifically telling it to make sensible sub-functions for each of the following units:
+//  the parts related to getting the phase, the parts related to the throttle control, and the parts related to the LEDs
+// This is the result. I like it, at least at first glance.
 
-// it also does so much else. working on refactoring it. 
-// TODO: refactor handleMeltybraindrive()
+/**
+ * Updates the robot's phase based on elapsed time and rotation speed
+ * 
+ * @param rps Current revolutions per second
+ * @param now Current time in microseconds
+ * @return Updated revolution duration in microseconds
+ */
+unsigned long updatePhase(float rps, unsigned long now) {
+  // Calculate time since last update
+  unsigned long deltaTime = now - phaseState.lastPhaseUpdate;
+  phaseState.lastPhaseUpdate = now;
+  
+  // Calculate the current revolution period based on rps
+  unsigned long updatedRevDuration = (unsigned long)(1000000.0f / rps);
+  
+  // Increment continuous phase based on elapsed time, scaled by the current revolution period
+  phaseState.continuousPhase += (float)deltaTime / updatedRevDuration;
+  
+  // Handle phase wrap-around
+  if(phaseState.continuousPhase > 1.0f) {
+    phaseState.usRevStartTime = now; 
+    phaseState.continuousPhase = fmod(phaseState.continuousPhase, 1.0f);
+  // should this use the fractional part (timeSinceRevStart/revDuration) to project the actual start time more accurately? assumption is that will be called regularly enough to make this close enough.
+  }
+  
+  // Update global angular position
+  angularPosition = phaseState.continuousPhase;
+  
+  return updatedRevDuration;
+}
+
+// Modify calculatePIDOutput to handle bidirectional control
+float calculatePIDOutput(float currentRPM, unsigned long now) {
+  // Time since last PID update in seconds
+  float dt = (now - pidState.lastPIDUpdate) / 1000000.0f;
+  pidState.lastPIDUpdate = now;
+  
+  // Prevent division by zero and unreasonable dt values
+  if (dt < 0.001f || dt > 0.1f) dt = 0.001f;
+
+  if (pidState.targetRPM == 0.0f) return 0; // do not optimize for being stopped yet.
+
+  // Calculate error between target and current RPM
+  float error = pidState.targetRPM - currentRPM;
+  
+  // Calculate integral term with anti-windup
+  pidState.errorIntegral += error * dt;
+  if (pidState.errorIntegral > pidConstants.MAX_INTEGRAL) 
+    pidState.errorIntegral = pidConstants.MAX_INTEGRAL;
+  if (pidState.errorIntegral < -pidConstants.MAX_INTEGRAL) 
+    pidState.errorIntegral = -pidConstants.MAX_INTEGRAL;
+  
+  // Calculate derivative term
+  float errorDerivative = 0.0f;
+  if (pidState.lastError != 0.0f || error != 0.0f) {
+    errorDerivative = (error - pidState.lastError) / dt;
+  }
+  pidState.lastError = error;
+  
+  // Calculate PID output
+  float pidOutput = (pidConstants.kP * error) + 
+                    (pidConstants.kI * pidState.errorIntegral) + 
+                    (pidConstants.kD * errorDerivative);
+  
+  // Apply minimum throttle to overcome friction
+  float baseLevel = pidOutput;
+  
+  // if we asked for less than 100 RPM, do nothing.
+  if (pidState.targetRPM <= ZERO_THRESHOLD ) {
+    baseLevel = 0.0f;
+  } else {
+    // Apply minimum throttle magnitude
+    float minThrottleSign = (pidState.targetRPM > 0) ? 1.0f : -1.0f;
+    if (fabs(baseLevel) < pidConstants.MIN_THROTTLE) {
+      baseLevel = minThrottleSign * pidConstants.MIN_THROTTLE;
+    }
+  }
+  
+  // Clamp the base throttle level
+  if (baseLevel > pidConstants.OUTPUT_CAP) baseLevel = pidConstants.OUTPUT_CAP;
+  if (baseLevel < -pidConstants.OUTPUT_CAP) baseLevel = -pidConstants.OUTPUT_CAP;
+  
+  return baseLevel;
+}
+
+// Update calculateMotorThrottles to handle negative base levels
+struct ThrottleValues calculateMotorThrottles(float baseLevel, unsigned long updatedRevDuration, unsigned long usTimeSinceZero) {
+  // Calculate the adjusted heading
+  float adjustedHeading = headingOffset + stickAngle;
+  adjustedHeading = fmod(adjustedHeading, 1.0);
+  if (adjustedHeading < 0.0) {
+    adjustedHeading += 1.0;
+  }
+  
+  // Calculate delay durations for phase-based control
+  float usM1DelayDuration = adjustedHeading * updatedRevDuration;
+  float m2PhaseOffset = 0.5;
+  float usM2DelayDuration = usM1DelayDuration + m2PhaseOffset * updatedRevDuration;
+  if (usM2DelayDuration > updatedRevDuration) {
+    usM2DelayDuration -= updatedRevDuration;
+  }
+  
+  // Calculate phases for cosine-based throttle modulation
+  float ph1 = ((usTimeSinceZero - usM1DelayDuration) / (float)updatedRevDuration) * M_PI * 2.0f;
+  float ph2 = ((usTimeSinceZero - usM2DelayDuration) / (float)updatedRevDuration) * M_PI * 2.0f;
+  
+  float cos_ph1 = cos(ph1);
+  float cos_ph2 = cos(ph2);
+  
+  // Calculate throttle modulation parameters
+  float speedLen = stickLength;
+  float mixFrac = 0.15f;
+  float absMixFrac = fabs(mixFrac);
+  
+  // Adjust mixing fraction if needed
+  float absBaseLevel = fabs(baseLevel);
+  if (absBaseLevel > (1.0f - absMixFrac)) {
+    mixFrac = (baseLevel > 0) ? (1.0f - absBaseLevel) : -(1.0f - absBaseLevel);
+  }
+  
+  // Calculate final throttle values for both motors
+  ThrottleValues throttles;
+  throttles.th1 = (cos_ph1 * mixFrac * speedLen) + baseLevel;
+  throttles.th2 = (cos_ph2 * mixFrac * speedLen) + baseLevel;
+  
+  // Ensure throttle values remain within [-1, 1]
+  throttles.th1 = fmax(-1.0f, fmin(1.0f, throttles.th1));
+  throttles.th2 = fmax(-1.0f, fmin(1.0f, throttles.th2));
+  
+  return throttles;
+}
+
+/**
+ * Updates LED display and indicators based on current state
+ * 
+ * @param cos_ph1 Cosine of first motor phase
+ * @param currentRPM Current RPM of the robot
+ */
+void updateLEDIndicators(float cos_ph1, float currentRPM) {
+  // Set LED color based on motor 1 phase
+  uint8_t r = 0;
+  uint8_t b = cos_ph1 > 0.7071 ? 255 : 0;
+  uint8_t g = 0;
+  setRGB(r, g, b, 0);
+  
+  // Draw 8 colors in a circle based on angular position
+  int pp = (int)fmod(angularPosition * 8.0, 8.0);
+  r = pp & 4 ? 32 : 0;
+  g = pp & 2 ? 32 : 0;
+  b = pp & 1 ? 32 : 0;
+  setRGB(r, g, b, 4);
+  
+  // Update LED display with current position, RPM and target percentage
+  updateLEDDisplay(angularPosition, currentRPM, pidState.targetRPM/100.0f); // to normalize for display
+  updateLEDs();
+}
+
+/**
+ * Main function to handle melty brain driving mode
+ */
 void handleMeltybrainDrive() {
   static uint32_t numCalls = 0;
-  // Get the current time in microseconds
   
-  static float continuousPhase = 0.0f;
-  static unsigned long lastPhaseUpdate = micros();
+  // Initialize timing variables if this is the first call
+  if (numCalls == 0) {
+    phaseState.lastPhaseUpdate = micros();
+    pidState.lastPIDUpdate = micros();
+  }
+  
   while (true) {
     numCalls++;
-    if (!rc_signal_is_healthy()) {  // we need to bail this loop if we lose signal.
-//      return;                       // next loop() call will zero throttle etc // lies. just force power to zero.
+    
+    // Check for signal health and update inputs
+    if (!rc_signal_is_healthy()) {
       stickLength = 0.0;
       powerInput = 0.0;
+      pidState.targetRPM = 0.0f;
+    } else {
+      updateInputs();
     }
-    else updateInputs();
-
-  unsigned long now = micros();
-  unsigned long deltaTime = now - lastPhaseUpdate;
-  lastPhaseUpdate = now;
-
-  // Calculate the current revolution period based on rps
-  float rps = calculateRPS();
-  unsigned long updatedRevDuration = (unsigned long)(1000000.0f / rps);
-
-  // Increment continuous phase based on elapsed time, scaled by the current revolution period
-  continuousPhase += (float)deltaTime / updatedRevDuration;
-  if(continuousPhase > 1.0f)
-  {
-    usRevStartTime = now;
-    continuousPhase = fmod(continuousPhase, 1.0f);
-  }
-
-  // Use continuousPhase for LED synchronization, etc.
-  angularPosition = continuousPhase;
-
-    // int now_pos = (int)(ledcols * fmod(phase + accelAngle  , 1.0));
-
-    // uint8_t mag = accelMag  ;
-    // int i_mag = (int)(log(accelMag) * 2.0);
-    // if(i_mag > ledcols - 1) i_mag = ledcols -1;
-    // i_mag += 4;
-    // addPixel(now_pos, i_mag, 0, 0, mag);
-
-    // copyScreen();
-
-    // Calculate the time passed in the current revolution
-    unsigned long usTimeSinceZero = now - usRevStartTime;
-
-
-    // Calculate the adjusted heading
-    float adjustedHeading = headingOffset + stickAngle;
-    adjustedHeading = fmod(adjustedHeading, 1.0);
-    if (adjustedHeading < 0.0) {
-      adjustedHeading += 1.0;
-    }
-
-    // Calculate usM1DelayDuration and usM2DelayDuration
-    float usM1DelayDuration = adjustedHeading * updatedRevDuration;
-
-    // for phased based speed transition for translation
-    float m2PhaseOffset = 0.5;
-    float usM2DelayDuration = usM1DelayDuration + m2PhaseOffset * updatedRevDuration;
-    if (usM2DelayDuration > updatedRevDuration) {
-      usM2DelayDuration -= updatedRevDuration;
-    }
-
-    // Calculate width for motor activation checks
-    float speedLen = stickLength;
-
-    // Set the throttle for each motor using the global throttle value
-    // modulated by a cosine function
-    float ph1 = ((usTimeSinceZero - usM1DelayDuration) / (float)updatedRevDuration) * M_PI * 2.0f;
-    float ph2 = ((usTimeSinceZero - usM2DelayDuration) / (float)updatedRevDuration) * M_PI * 2.0f;
-
-    // reshape the cosine function so it spends more time with bigger numbers on the positive side
-    // to try balance actual behavior of motors.
-    float cos_ph1 = reshapeCos(cos(ph1));
-    float cos_ph2 = reshapeCos(cos(ph2));
-
-    float mixFrac = 0.15f;
-    float baseLevel = powerInput + speedLen * mixFrac;
-    if (baseLevel > 1) baseLevel = 1;
-    if (baseLevel > (1.0f - mixFrac)) {
-      mixFrac = 1.0f - baseLevel;
-    }
-    if (baseLevel < mixFrac) {
-      mixFrac = baseLevel;
-    }
-    float th1 = (cos_ph1 * mixFrac * speedLen) + baseLevel;
-    float th2 = (cos_ph2 * mixFrac * speedLen) + baseLevel;
-
-    setThrottle(th1, -th2);  // switched signs for motor2.
+    
+    // Get current time
+    unsigned long now = micros();
+    
+    // sw3Pos is one of { 0, 1, 2 }; 
+    // 0: use LUT with accelMag for rps
+    // 1: use radius to calculate rps
+    // 2: use current accel and radius to generate RPS value and save it indexed by current accel for use in interpolation.
+    float rps = calculateActualRPS(accelMag); // use LUT if 3-position switch is 1
+    if(sw3pos != 0) rps = calculateRPS();
+    storeCalibrationPoint(accelMag, rps, sw3pos == 2); 
    
-    // setRGB(x, y, z, 0) sets the first 4 LEDs to the same color. (the ones on the far end are first.)
-    uint8_t r = 0;
-    uint8_t b = cos_ph1 > 0.7071 ? 255: 0;
-    uint8_t g = 0;
-    setRGB(r, g, b, 0);
-
-    // draws 8 colors in a circle: black, red, green, yellow, blue, magenta, cyan, white
-    int pp = (int)fmod(angularPosition * 8.0, 8.0);
-    r= pp & 4 ? 32 : 0;
-    g= pp & 2 ? 32 : 0;
-    b= pp & 1 ? 32 : 0;
-    setRGB(r, g, b, 4);
-
-    // this should display numbers.
-    updateLEDDisplay(angularPosition, rps, powerInput);
-
-    updateLEDs(); // manually calling it here so we get it faster. lock seems to work fine.
+    // Calculate current rotational speed
+    float currentRPM = rps * 60.0f; // Convert RPS to RPM
+    
+    // Update phase tracking
+    unsigned long updatedRevDuration = updatePhase(rps, now);
+    
+    // Calculate time since last revolution start
+    unsigned long usTimeSinceZero = now - phaseState.usRevStartTime;
+    
+      
+    // Set target RPM using the mapped input
+    pidState.targetRPM = powerInput * pidConstants.MAX_RPM;
+    pidState.targetRPM = pidState.targetRPM < 100.0f ? 0.f : pidState.targetRPM;
+    
+    // Calculate PID-controlled base throttle level
+    float baseLevel = calculatePIDOutput(currentRPM, now);
+    // float baseLevel = powerInput; // bypass the PID and go direct power demand for baseLevel.
+    // Calculate motor throttle values
+    ThrottleValues throttles = calculateMotorThrottles(baseLevel, updatedRevDuration, usTimeSinceZero);
+    
+    // Apply throttle values to motors
+    setThrottle(throttles.th1, -throttles.th2);  // Negative sign for motor 2
+    
+    // Get the cosine value for LED display (recalculating here for LED purposes)
+    float ph1 = (phase + headingOffset + stickAngle) * M_PI * 2.0f;
+    float cos_ph1 = cos(ph1); 
+    
+    // Update LED display
+    updateLEDIndicators(cos_ph1, currentRPM);
+    
+    // Check for exit conditions
     static unsigned long lastBreakCheck = 0;
-    if (now - lastBreakCheck > 1000000) { // 1 seconds
+    if (now - lastBreakCheck > 1000000) { // 1 second
         lastBreakCheck = now;
         break;
     }
     if(isInTankDriveMode()) break;
-  } // end of handleMeltybrainDrive while(1) loop
+    if (!rc_signal_is_healthy()) break;
+  }  
 }
 
 void loop() {
@@ -611,20 +783,7 @@ void loop() {
   ibus.loop();
   fadeScreen(3,5);
   copyScreen();
-  if (!rc_signal_is_healthy()) {
-    ibus.loop();
-    setThrottle(0, 0);
-    setCode(0402, (millis() >> 3)&0x3f ); // rrrr++bb
-    delay(50);
-    setCode(0222, (millis() >> 3)&0x3f ); // rr+gg+bb
-    delay(50);
-    setCode(0204, (millis() >> 3)&0x3f ); // rr++bbbb
-    delay(50);  // stop the speedy scroll
-    setCode(0222, (millis() >> 3)&0x3f ); // rr+gg+bb
-    delay(50);
-    displayState();
-    return;
-  }
+  wait_for_remote_signal();
   updateInputs();
   if (isInTankDriveMode()) {
     setCode(0202);
