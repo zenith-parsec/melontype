@@ -19,7 +19,7 @@ void pwmInterruptHandler();
 
 // Update PID constants struct to support bidirectional range
 struct PIDConstants {
-  float kP = 0.005f;      // Proportional gain
+  float kP = 0.0025f;      // Proportional gain
   float kI = 0.0f; // 0.0001f;     // Integral gain
   float kD = 0.0f; // 0.001f;      // Derivative gain
   float MAX_RPM = 2000.0f; // Hard cap on RPM
@@ -760,7 +760,7 @@ void handleMeltybrainDrive() {
     setThrottle(throttles.th1, -throttles.th2);  // Negative sign for motor 2
     
     // Get the cosine value for LED display (recalculating here for LED purposes)
-    float ph1 = (phase + headingOffset + stickAngle) * M_PI * 2.0f;
+    float ph1 = (phaseState.continuousPhase + headingOffset + stickAngle) * M_PI * 2.0f;
     float cos_ph1 = cos(ph1); 
     
     // Update LED display
