@@ -262,6 +262,7 @@ void wait_for_remote_signal()
   0xffff};
   uint8_t i = 0;
   while (!ibus.readChannel(0) || !rc_signal_is_healthy()) {
+    setThrottle(0,0);
     checkSerial();
     ibus.loop();  // trying to update values
     Serial.println("Waiting for remote signal...");
@@ -414,6 +415,8 @@ void updateInputs() {
     stickAngle = 0;
     stickLength = 0;
     powerInput = 0;
+    pidState.targetRPM = 0.0f;
+    
   }
 
 }
@@ -588,7 +591,10 @@ float calculatePIDOutput(float currentRPM, unsigned long now) {
 
   // Calculate error between target and current RPM
   float error = pidState.targetRPM - currentRPM;
-  
+  // yep, this is a hack.
+  if(error >  250.0f) error =  250.0f;
+  if(error < -250.0f) error =  250.0f;
+
   // Calculate integral term with anti-windup
   pidState.errorIntegral += error * dt;
   if (pidState.errorIntegral > pidConstants.MAX_INTEGRAL) 
@@ -721,6 +727,8 @@ void handleMeltybrainDrive() {
       stickLength = 0.0;
       powerInput = 0.0;
       pidState.targetRPM = 0.0f;
+      setThrottle(0,0); 
+      return;
     } else {
       updateInputs();
     }
