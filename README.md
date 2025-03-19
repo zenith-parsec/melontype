@@ -12,13 +12,38 @@
   * it's probably a bad idea for everyone.
 
 ## Current status
-This code _basically_ works. The driving experience is not what it should be. You currently need to rotate the aim around as you move to keep it going straight, 
-especially at "high speeds". Doing this I was able to translate from one end of my 4' long test box to the other and back again in somewhere between 20 and 30 
-seconds. This is probably fast enough as is for the NHRL 2025 Functionality test, provided you learn to control it. The main reason for this and the previous commit
-is to make sure there is a "good enough" version to go back to if the next radical code changes break everything.
+The main reason for this commit is to make sure there is a "good enough" version to go back to if the next radical code changes break everything. 
 
-The heading lock is rock steady once you reach ~400 rpm. It just doesn't mean anything, and when you start moving, it deflects in a random direction. But 
-the heading stays fixed (assume it was fixed) and you just have to change your relative position with the right stick... see below for idealized driving instructions.
+Let's pretend the previous commit was perfect: if you get commit 20d46d115944a705967b1c6af9ae70f9de6671d1 you should have a working robot. The description of functionality here is for that version. 
+
+This code _basically_ works. The driving experience is not what it should be. You currently need to rotate the aim around as you move to keep it going straight, but this may be due to other bugs.
+It can translate between marks 2 feet apart in my 4' long test box and back again in only a few seconds. I only need to be able to do 10 feet/minute. This is definitely fast enough for the NHRL 2025 Functionality test. It did the pinball thing where it bounces off walls when I missed my actual target and hit the wall.
+
+The robot now uses a PID controller so the throttle is actually a percent of the maximum RPM selector instead of power controller for the ESCs directly.
+
+There are two numbers displayed on the rotating surface. one of these is the RPM and the other is (i think) the current RPM percent?
+
+The heading lock is rock steady. The heading stays fixed (assume it was fixed) and you just have to change your relative position with the right pot... see below for idealized driving instructions.
+
+You can enter a mode where you edit the curve for the current robot by first clearing any existing config:
+- plug the USB cable into the teensy
+- open the serial monitor
+- type 'c' and press enter. any previous config is cleared.
+- disconnect the robot from USB and put the top plate back on.
+
+The next time you use the robot, select some rotation speed with the throttle, wait for it to stabilize (should be instantaneous), then use **Channel 5** and **Channel 6** to stop the display from rotating.
+Then put the 3-position swiitch in the middle position. once the display is stable, move the switch to the bottom position, then back to middle.
+Increase the speed, adjust the dials to stabilize the display, and toggle the 3-position switch again to store the next position. Repeat for lots of speeds.
+
+Once you have enough samples, change the 3-position switch to the top position. now that you have multiple piecewise mapping functions linking data from centrifugal force to RPM, this will keep the display locked at different speeds.
+
+You can dump the current curve data by:
+- plugging a USB cable into the computer and teensy.
+- open the serial monitor
+- type 'p' and press enter. This should dump all captured input mappings.
+ - the dumped look up table maps the current centrifugal acceleration to a predicted RPM. The code interpolates between forces.
+
+The reason for this is: after calibrating the mappings you won't need to adjust the "virtual radius" dial manually ever again.
 
 ------
 
@@ -28,7 +53,19 @@ the heading stays fixed (assume it was fixed) and you just have to change your r
 - Ensure your transmitter is configured correctly:
   - **Channel 5** is mapped to a potentiometer (dial).
   - **Channel 6** is mapped to another potentiometer (dial).
-- Make sure the robot is powered on and ready to spin.
+  - **Channel 7** is mapped to the inner 2-position switch. If this switch is down, the numeric display rotates the other way.
+  - **Channel 8** is mapped to a 3-position switch.
+    - top is default operation.
+      - with no saved config, use **Channel 5** and **Channel 6** to calculate current offset.
+      - with saved config, use that config.
+    - middle is programming mode.
+    - toggling to the botton position and back to the middle saves the current force/RPM value in the config.
+      - the more and the more evenly (randomly) spaced, the better.
+- Make sure your transmitter is turned off and not within easy reach.
+- Make sure the robot is powered on.
+  - you should see a moving red, green, and blue pattern. This means it's looking for a radio signal.
+- turn on the transmitter. You should now see a flashing pattern of mostly green and blue.
+  - make sure the throttle stays very low until the bot is in the test box. (you can carry the whole bot by the sticky-out-bits of the weapon.)
 
 ## Start Spinning
 - Use **Channel 3** (left stick) to control the spinning speed:
@@ -67,7 +104,6 @@ the heading stays fixed (assume it was fixed) and you just have to change your r
 - Once properly tuned, the robot should move smoothly and consistently in the direction of the blue arc.
 
 
-(note to self: add transmitter to list of parts: FS-i6)
 
 TODO: images would show some ideas better
 
@@ -88,62 +124,5 @@ It took on the order of 10 hours to write, which is much faster than it would've
 me to get to this point. I got frustrated several times with the AI for not being able
 to do anything right. 
 
-This is also the 2nd attempt at doing it, and it's only as good (ha!) as it
-is because I learned so much from how badly it did with the first attempt.
-
-------
-# comments from initial commit
-below is the comment From the top of the source file when I initially committed it.
-this comment is out of date, and reflects the initial commit state of the code
-the current comment is likely to shrink as things are documented elsewhere and
-problems are solved. 
-
-
-```
-// this is terrible code.
-// not even being self-deprecating.
-// I haven't even read all of it.
-// Well, I have _read_ it, but not actually _looked_ at it.
-// so use this at your own risk.
-// I'll update it later when I've had a chance to test it more (one of ESCs is out, waiting on a replacement.)
-
-// This code was written by me, zenith-parsec, and ChatGPT using the GPT-4o model.
-// It took nearly two days worth of ChatGPT access, with limitations kicking in on 
-// multiple occasions, only to expire a few hours later when 24h had passed since 
-// the last coding burst. I asked for functions which performed various tasks, and
-// pointed out the myriad coding errors the AI made and asked for corrections. On
-// a few occasions I gave up trying to get it to solve the last few minor issues 
-// and just told it what I had done to the code on my side.
-
-// The only testing I have done so far is to boot it up with a 6-channel IBUS capable
-// receiver bound to my transmitter. First I removed the accelerometer chip from 
-// the socket and it went into an infinite loop because it failed to detect the 
-// accelerometer. good. Then I tried with the accelerometer plugged in but no radio.
-// It stalled at the expected location, waiting for a signal.
-// Then I plugged in the receiver and rebooted it. It made it to the main loop.
-// In the main loop, with the left stick held in the lower left corner, i could see
-// the debug values scrolling past in the serial monitor.
-// the values made sense for the inputs. I verified that the radiusSize varied from 
-// 1mm to 100mm and that the transmitter was sensitive enough to enter sub-mm values
-// for the distance from the accellerometer to the center of rotation. This should 
-// allow rock solid direction lock. 
-
-// The robot should have red, green, and blue LEDs (all with resistors) on -ve side 
-// of the appropriately named ports. The other side should be connected to 5v.
-// The logic driving the LEDs in updateLEDs is inverted, with literal 1 turning the 
-// LED off, and a 0 turning it on. Red LEDs have fwd voltage of about 1.6-2.2v, but
-// we are connecting the negative lead to 3.3v, and the positive lead to 5v. With 
-// the negative lead supplying 3.3v, the potential difference over the LED is only 
-// 1.7v, which isn't enough to brightly light up. When the LED pin goes to 0v, the
-// difference becomes 5v, and the LED is brightly illuminated.
-
-// the IBus connection needs a hardware serial port. The IBusBM library doesn't 
-// support Teensy by default. I couldn't easily add perfect support, but I removed
-// the warning part in the begin() method about being an unsupported board so it
-// compiles cleanly, and I call the ibus.loop() method manually. (it might already
-// be called on the timer but I have no idea how to tell at the moment.) It's not
-// like this makes the code any worse though.
-
-// currently it uses ibus for reading but still uses PWM to do the servo control.
-// eventually moving to dshot, but no rush.
-```
+This is also the 2nd attempt at doing it, and it's only as good (ha!) as it is because
+I learned so much from how badly it did with the first attempt.
