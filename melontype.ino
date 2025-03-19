@@ -19,7 +19,7 @@ void pwmInterruptHandler();
 
 // Update PID constants struct to support bidirectional range
 struct PIDConstants {
-  float kP = 0.0025f;      // Proportional gain
+  float kP = 0.00125f;      // Proportional gain 
   float kI = 0.0f; // 0.0001f;     // Integral gain
   float kD = 0.0f; // 0.001f;      // Derivative gain
   float MAX_RPM = 2000.0f; // Hard cap on RPM
@@ -86,9 +86,9 @@ volatile float headingOffset = 0.0;  // offset around circle heading light shoul
 volatile bool reverseM1 = false;
 volatile bool reverseM2 = false;
 volatile int sw3pos = 0;
+volatile int swReverseText = false;
 
-
-
+volatile float g_cos_ph1 = 0;
 
 // map the throttle input so it spends more time in the low areas.
 float stretchThrottle(float throttle) {
@@ -372,9 +372,7 @@ void updateInputs() {
   stickHoriz = map(horiz, 1000.0, 2000.0, -1.0, 1.0);
 
   // Calculate stick angle in radians as a fraction of a circle
-  // ACTUALLY swapped sign of output and argume so circle starts at top and goes clockwise on stick.
-  // this might make the controls work better? 
-  stickAngle = atan2(-stickVert, stickHoriz) / (2 * PI);  // swapped sign to test
+  stickAngle = atan2(stickVert, stickHoriz) / (2 * PI); 
 
   // Calculate stick length (magnitude) using Pythagoras' theorem
   float sl = sqrt(sq(stickVert) + sq(stickHoriz));
@@ -409,6 +407,8 @@ void updateInputs() {
 
   int ch8 = ibus.readChannel(8);
   sw3pos = abs(ch8 - 1000) / 500;  // assuming it doesn't go too far below 1000, this should work
+  int ch7 = ibus.readChannel(7);
+  swReverseText = ch7 > 1500 ? 1 : 0;
 
   if(!rc_signal_is_healthy())
   {
@@ -507,24 +507,24 @@ void updateLEDDisplay(float phase, float rps, float throttle) {
     // Display RPM in first half of rotation in blue
     if (phase < 0.5) {
         uint16_t rpm = (uint16_t)(rps * 60.0f);  // Convert RPS to RPM
-        getColumnData(rpm, phase * 2.0f, false, columnData);
+        getColumnData(rpm, phase * 2.0f, swReverseText, columnData);
         for (int i = 0; i < 7; i++) {
             if (columnData[i]) {
-                setRGB(0, 0, 255, i + 5);  // Blue for RPM
+                setRGB(0, 0, 255, i + 3);  // Blue for RPM
             } else {
-                setRGB(0, 0, 0, i + 5);    // Off if no pixel
+                setRGB(0, 0, 0, i + 3);    // Off if no pixel
             }
         }
     }
     // Display throttle in second half of rotation in green
     else {
         uint16_t throttleDisplay = (uint16_t)(throttle * 100.0f);  // Scale throttle to percentage
-        getColumnData(throttleDisplay, phase * 2.0f - 1.0f, false, columnData);
+        getColumnData(throttleDisplay, phase * 2.0f - 1.0f, swReverseText, columnData);
         for (int i = 0; i < 7; i++) {
             if (columnData[i]) {
-                setRGB(0, 255, 0, i+5);  // Green for throttle
+                setRGB(0, 255, 0, i + 3);  // Green for throttle
             } else {
-                setRGB(0, 0, 0, i+5);    // Off if no pixel
+                setRGB(0, 0, 0, i + 3);    // Off if no pixel
             }
         }
     }
@@ -591,9 +591,6 @@ float calculatePIDOutput(float currentRPM, unsigned long now) {
 
   // Calculate error between target and current RPM
   float error = pidState.targetRPM - currentRPM;
-  // yep, this is a hack.
-  if(error >  250.0f) error =  250.0f;
-  if(error < -250.0f) error =  250.0f;
 
   // Calculate integral term with anti-windup
   pidState.errorIntegral += error * dt;
@@ -656,7 +653,9 @@ struct ThrottleValues calculateMotorThrottles(float baseLevel, unsigned long upd
   float ph1 = ((usTimeSinceZero - usM1DelayDuration) / (float)updatedRevDuration) * M_PI * 2.0f;
   float ph2 = ((usTimeSinceZero - usM2DelayDuration) / (float)updatedRevDuration) * M_PI * 2.0f;
   
+  
   float cos_ph1 = cos(ph1);
+  g_cos_ph1 = cos_ph1;
   float cos_ph2 = cos(ph2);
   
   // Calculate throttle modulation parameters
@@ -691,7 +690,7 @@ struct ThrottleValues calculateMotorThrottles(float baseLevel, unsigned long upd
 void updateLEDIndicators(float cos_ph1, float currentRPM) {
   // Set LED color based on motor 1 phase
   uint8_t r = 0;
-  uint8_t b = cos_ph1 > 0.7071 ? 255 : 0;
+  uint8_t b = cos_ph1 * 255; // > 0.7071 ? 255 : 0;
   uint8_t g = 0;
   setRGB(r, g, b, 0);
   
@@ -767,12 +766,8 @@ void handleMeltybrainDrive() {
     // Apply throttle values to motors
     setThrottle(throttles.th1, -throttles.th2);  // Negative sign for motor 2
     
-    // Get the cosine value for LED display (recalculating here for LED purposes)
-    float ph1 = (phaseState.continuousPhase + headingOffset + stickAngle) * M_PI * 2.0f;
-    float cos_ph1 = cos(ph1); 
-    
     // Update LED display
-    updateLEDIndicators(cos_ph1, currentRPM);
+    updateLEDIndicators(g_cos_ph1, currentRPM);
     
     // Check for exit conditions
     static unsigned long lastBreakCheck = 0;

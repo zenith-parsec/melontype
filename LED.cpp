@@ -96,7 +96,6 @@ void setRGB(uint16_t r, uint16_t g, uint16_t b, uint8_t idx) {
   {
     leds[idx-1]= color;
     leds[idx-2]= color;
-    leds[idx-3]= color;
     digitalWriteFast(13, r > 0 ? HIGH : LOW);
   }
 }
