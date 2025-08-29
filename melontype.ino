@@ -22,7 +22,7 @@ struct PIDConstants {
   float kP = 0.00125f;      // Proportional gain 
   float kI = 0.0f; // 0.0001f;     // Integral gain
   float kD = 0.0f; // 0.001f;      // Derivative gain
-  float MAX_RPM = 2000.0f; // Hard cap on RPM
+  float MAX_RPM = 3000.0f; // Hard cap on RPM
   float OUTPUT_CAP = 1.0f; // Maximum throttle output magnitude
   float MIN_THROTTLE = 0.05f; // Minimum throttle magnitude to overcome friction
   float MAX_INTEGRAL = 100.0f; // Anti-windup limit
@@ -152,8 +152,8 @@ float modulateThrottle(float inputThrottle, int idx) {
 // convert from 2-axis stick input into two channel "tank drive" motor output.
 // (converts stick to "tank mode" output)
 void handleTankDrive() {
-  float x = stickHoriz / 2.0;  // Horizontal stick input -0.5 - 0.5
-  float y = stickVert / 2.0;   // Vertical stick input   -0.5 - 0.5
+  float x = stickHoriz / 1.0;  // Horizontal stick input -1.0 - 1.0
+  float y = stickVert / 1.0;   // Vertical stick input   -1.0 - 1.0
 
   // Calculate motor control values based on stick input
   float m1 = x + y;  // Motor 1 throttle
@@ -218,6 +218,24 @@ void checkSerial() {
       // infinite loop... might help uploading if it was in a crash loop? 
       while(1) {  delay(1); }
     }
+    if(cmd == 's')
+    {
+      float f1 = Serial.parseFloat();
+      float f2 = Serial.parseFloat();
+      Serial.print("set[f1]=f2: we got ");
+      Serial.print(f1);
+      Serial.print(" ");
+      Serial.println(f2);
+      // don't set it until i've checked this works properly
+    }
+    if(cmd == 'd')
+    {
+      float f1 = Serial.parseFloat();
+      Serial.print("delete[f1]: we got ");
+      Serial.println(f1);
+      // don't delete it until i've checked this works properly
+    }
+
   }
 }
 
@@ -288,6 +306,8 @@ void initIBus() {
   wait_for_remote_signal();
   Serial.println("Remote signal received.");
 
+#if 0 // faster recovery by not needing to reset throttle.
+
   // Ensure that throttle is in the down position (assuming throttle is on channel 2)
   int throttle = ibus.readChannel(2);
   uint32_t endThrottleCheck = millis() + 100;
@@ -304,6 +324,9 @@ void initIBus() {
   }
   setCode(0);
   Serial.println("Throttle confirmed down.");
+
+#endif
+
 }
 
 void setup() {
@@ -312,8 +335,8 @@ void setup() {
   if (CrashReport) {
     Serial.print(CrashReport);
     delay(5000);
-    checkSerial();
   }
+  checkSerial();
   
   // Initialize LED subsystem: immediate start feedback
   initLEDs();
@@ -321,11 +344,11 @@ void setup() {
 
   // debugging test pattern black white cyan magenta yellow blue green red
   setRGB(32, 32, 32, 0);
-  setRGB(28, 28, 18, 4);
-  setRGB( 0, 28, 18, 5);
-  setRGB(28,  0, 18, 6);
+  setRGB(28, 28, 32, 4);
+  setRGB( 0, 28, 32, 5);
+  setRGB(28,  0, 32, 6);
   setRGB(28, 28,  0, 7);
-  setRGB( 0,  0, 18, 8);
+  setRGB( 0,  0, 32, 8);
   setRGB( 0, 28,  0, 9);
   setRGB(28,  0,  0, 10);
 
@@ -333,8 +356,8 @@ void setup() {
   initESCs();
   Serial.println("ESCs initialized and motors stopped.");
 
-  Serial.println("Initializing Meltybrain Robot... send 'q' within 2 seconds to enter infinite loop");
-  delay(2000);
+  Serial.println("Initializing Meltybrain Robot... send 'q' now to enter infinite loop");
+  delay(250);
 
   checkSerial();
 
@@ -368,7 +391,7 @@ void updateInputs() {
   float horiz = ibus.readChannel(1);  // Channel 1 (horizontal)
 
   // Convert to centered values (from 1000-2000 to -1.0 to 1.0)
-  stickVert  = map(vert , 1000.0, 2000.0, -1.0, 1.0);
+  stickVert  = map(vert , 2000.0, 1000.0, -1.0, 1.0);
   stickHoriz = map(horiz, 1000.0, 2000.0, -1.0, 1.0);
 
   // Calculate stick angle in radians as a fraction of a circle
@@ -501,31 +524,17 @@ unsigned long usPrevRevStartTime = 0;               // Store the last timestamp
 
 
 // draws RPM on the bot. hopefully. it's only 3 digits now so it might fit.
-void updateLEDDisplay(float phase, float rps, float throttle) {
+void updateLEDDisplay(float phase, float rps);
     uint8_t columnData[8];  // Assuming 8 LEDs per column
     
-    // Display RPM in first half of rotation in blue
-    if (phase < 0.5) {
-        uint16_t rpm = (uint16_t)(rps * 60.0f);  // Convert RPS to RPM
-        getColumnData(rpm, phase * 2.0f, swReverseText, columnData);
-        for (int i = 0; i < 7; i++) {
-            if (columnData[i]) {
-                setRGB(0, 0, 255, i + 3);  // Blue for RPM
-            } else {
-                setRGB(0, 0, 0, i + 3);    // Off if no pixel
-            }
-        }
-    }
-    // Display throttle in second half of rotation in green
-    else {
-        uint16_t throttleDisplay = (uint16_t)(throttle * 100.0f);  // Scale throttle to percentage
-        getColumnData(throttleDisplay, phase * 2.0f - 1.0f, swReverseText, columnData);
-        for (int i = 0; i < 7; i++) {
-            if (columnData[i]) {
-                setRGB(0, 255, 0, i + 3);  // Green for throttle
-            } else {
-                setRGB(0, 0, 0, i + 3);    // Off if no pixel
-            }
+  // Display RPM in first half of rotation in blue
+    uint16_t rpm = (uint16_t)(rps * 60.0f);  // Convert RPS to RPM
+    getColumnData(rpm, phase * 1.5f, swReverseText, columnData);
+    for (int i = 0; i < 7; i++) {
+        if (columnData[i]) {
+            setRGB(128, 0, 255, i + 3);  // Blue for RPM
+        } else {
+            setRGB(0, 0, 0, i + 3);    // Off if no pixel
         }
     }
 }
@@ -643,7 +652,7 @@ struct ThrottleValues calculateMotorThrottles(float baseLevel, unsigned long upd
   
   // Calculate delay durations for phase-based control
   float usM1DelayDuration = adjustedHeading * updatedRevDuration;
-  float m2PhaseOffset = 0.5;
+  float m2PhaseOffset = 0.5; // TODO offset by fraction of stickLength so 1 = 0.5
   float usM2DelayDuration = usM1DelayDuration + m2PhaseOffset * updatedRevDuration;
   if (usM2DelayDuration > updatedRevDuration) {
     usM2DelayDuration -= updatedRevDuration;
@@ -660,18 +669,19 @@ struct ThrottleValues calculateMotorThrottles(float baseLevel, unsigned long upd
   
   // Calculate throttle modulation parameters
   float speedLen = stickLength;
-  float mixFrac = 0.15f;
+  float mixFrac = 0.25f;
   float absMixFrac = fabs(mixFrac);
   
   // Adjust mixing fraction if needed
   float absBaseLevel = fabs(baseLevel);
   if (absBaseLevel > (1.0f - absMixFrac)) {
-    mixFrac = (baseLevel > 0) ? (1.0f - absBaseLevel) : -(1.0f - absBaseLevel);
+    mixFrac = (baseLevel > 0) ? (1.0f - absBaseLevel) : -(1.0f - absBaseLevel); 
+    // mixFrac is (if baseL)
   }
   
   // Calculate final throttle values for both motors
   ThrottleValues throttles;
-  throttles.th1 = (cos_ph1 * mixFrac * speedLen) + baseLevel;
+  throttles.th1 = (cos_ph1 * mixFrac * speedLen) + baseLevel; // TODO when phase based speed control remove speedLen
   throttles.th2 = (cos_ph2 * mixFrac * speedLen) + baseLevel;
   
   // Ensure throttle values remain within [-1, 1]
@@ -702,7 +712,7 @@ void updateLEDIndicators(float cos_ph1, float currentRPM) {
   setRGB(r, g, b, 4);
   
   // Update LED display with current position, RPM and target percentage
-  updateLEDDisplay(angularPosition, currentRPM, pidState.targetRPM/100.0f); // to normalize for display
+  updateLEDDisplay(angularPosition, currentRPM); // let's just get RPM wrapped nicely? 
   updateLEDs();
 }
 
